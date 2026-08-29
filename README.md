@@ -46,3 +46,7 @@ meta/stats.json
 ```
 
 当前转换所有非深度相机流：头部 RGB、左右腕部 RGB、头部中心/左/右鱼眼 RGB；深度流明确不转换。
+## TODO
+
+- [ ] 低通滤波：基于代表性遥操轨迹确定 action 起始段平滑的截止频率、持续时间和交叉淡入参数，并完成前后动作曲线与 ACT 训练效果对比。
+- [ ] FFmpeg 解码加速：在 `experiment/process-parallel-conversion` 分支中，以 FFmpeg 替代 Python/PyAV 的 H.265 逐帧解码；实现跨任务全局进程池、限制单进程线程数，并以相同输入测试吞吐、输出帧数与 LeRobot v2.1 完整读取一致性。
