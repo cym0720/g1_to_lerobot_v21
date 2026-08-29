@@ -1,7 +1,7 @@
 """Reusable process-pool routing for CPU and hardware-accelerated workloads."""
 from __future__ import annotations
 
-from concurrent.futures import Future, ProcessPoolExecutor, as_completed
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Sequence
@@ -60,3 +60,17 @@ def run_routed_process_jobs(
         for future in as_completed(futures):
             results[futures[future]] = future.result()
     return results
+
+
+def run_process_job_groups(
+    groups: Sequence[tuple[Callable[[tuple[Any, ...]], Any], Sequence[tuple[Any, ...]], Sequence[ProcessLane]]],
+) -> list[list[Any]]:
+    """Run independent routed process-pool groups concurrently."""
+    if not groups:
+        return []
+    with ThreadPoolExecutor(max_workers=len(groups)) as coordinator:
+        futures = [
+            coordinator.submit(run_routed_process_jobs, worker, jobs, lanes)
+            for worker, jobs, lanes in groups
+        ]
+        return [future.result() for future in futures]

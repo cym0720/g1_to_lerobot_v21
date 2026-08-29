@@ -22,7 +22,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from packages.ffmpeg_io import encode_h265_aligned as encode_h265_ffmpeg, encode_jpeg_sequence, video_frame_count
-from packages.execution import run_routed_process_jobs, video_process_lanes
+from packages.execution import ProcessLane, run_process_job_groups, run_routed_process_jobs, video_process_lanes
 
 
 def read_json(path: Path) -> dict: return json.loads(path.read_text(encoding="utf8"))
@@ -96,22 +96,41 @@ def encode_h265_aligned_pyav(ep: Path, spec: dict, target: np.ndarray, dest: Pat
         for packet in stream.encode(): writer.mux(packet)
     if written != len(target): raise ValueError(f'{ep.name}: {spec["source"]} decoded {written}/{len(target)} aligned frames')
 
-def encode_h265_aligned(ep: Path, spec: dict, target: np.ndarray, dest: Path, fps: int, preferred_backends: tuple[str, ...]) -> None:
+def encode_h265_aligned(ep: Path, spec: dict, target: np.ndarray, dest: Path, fps: int, preferred_backends: tuple[str, ...]) -> str:
     """Use FFmpeg hardware decode/encode; retain PyAV only for duplicate-frame compatibility."""
     source_times = timestamps(ep / spec['timestamp_source'])
     try:
         backend = encode_h265_ffmpeg(ep / spec['source'], source_times, target, dest, fps, spec.get('crop'), preferred_backends)
         print(f"{ep.name} {spec['source']} backend={backend}")
+        return backend
     except ValueError as error:
         if 'duplicate timestamp-aligned' not in str(error):
             raise
         encode_h265_aligned_pyav(ep, spec, target, dest, fps)
-def encode_wrist(ep: Path, camera: str, target: np.ndarray, dest: Path, fps: int) -> None:
+        return 'pyav'
+def encode_wrist(ep: Path, camera: str, target: np.ndarray, dest: Path, fps: int) -> str:
     files = sorted((ep / 'camera' / camera / 'color').glob('*.jpg'))
     source_ts = np.asarray([int(path.stem) for path in files], dtype=np.int64)
     selected = [files[index] for index in nearest(source_ts, target)]
     backend = encode_jpeg_sequence(selected, dest, fps)
     print(f"{ep.name} {camera} backend={backend}")
+    return backend
+def convert_camera(args: tuple[Path,int,Path,str,dict,np.ndarray,int,tuple[str,...]]) -> dict:
+    ep,index,root,camera,spec,target,fps,backends=args
+    destination=root/'videos/chunk-000'/camera/f'episode_{index:06d}.mp4'
+    try:
+        if spec['kind']=='jpg_timestamp_aligned':
+            source_camera='hand_left' if 'left_wrist' in camera else 'hand_right'
+            backend=encode_wrist(ep,source_camera,target,destination,fps)
+        elif spec['kind']=='h265_timestamp_aligned':
+            backend=encode_h265_aligned(ep,spec,target,destination,fps,backends)
+        else:
+            raise ValueError(f'unknown camera kind: {spec["kind"]}')
+        frames=video_frame_count(destination)
+        error='' if frames==len(target) else f'video_frames:{camera}:{frames}!={len(target)}'
+    except Exception as exc:
+        backend=backends[0] if backends else 'unknown'; error=f'{camera}:{type(exc).__name__}:{exc}'
+    return {'root':str(root),'episode_index':index,'camera':camera,'backend':backend,'error':error}
 def video_frames(path: Path) -> int:
     result=subprocess.run(["ffprobe","-v","error","-select_streams","v:0","-count_frames","-show_entries","stream=nb_read_frames","-of","default=nokey=1:noprint_wrappers=1",str(path)],capture_output=True,text=True,check=True)
     return int(result.stdout.strip())
@@ -152,8 +171,8 @@ def rgb_range_stats(count: int) -> dict:
     return {'min':[[[0.0]],[[0.0]],[[0.0]]],'max':[[[1.0]],[[1.0]],[[1.0]]],
             'mean':[[[0.5]],[[0.5]],[[0.5]]],'std':[[[0.25]],[[0.25]],[[0.25]]],'count':[count]}
 
-def convert_episode(args: tuple[Path,int,int,Path,dict,dict,tuple[str,...]]) -> dict:
-    ep,index,offset,root,schema,task,h265_backends=args; meta=read_json(ep/'meta_info.json'); target=timestamps(ep/'camera/head_color/head_color.txt'); fps=int(schema['fps'])
+def prepare_episode(args: tuple[Path,int,int,Path,dict,dict,object]) -> dict:
+    ep,index,offset,root,schema,task,_lane_payload=args; meta=read_json(ep/'meta_info.json'); target=timestamps(ep/'camera/head_color/head_color.txt'); fps=int(schema['fps'])
     numeric={}
     with h5py.File(ep/'record/raw_joints.h5','r') as h5:
         # Source device timestamps align heterogeneous H5 streams, but encoded
@@ -178,25 +197,13 @@ def convert_episode(args: tuple[Path,int,int,Path,dict,dict,tuple[str,...]]) -> 
         # v2.1->v3 loader because it deliberately excludes video columns.
         features[key]={'dtype':'video','shape':spec['output_shape'],'names':['height','width','channels'],'info':{'video.height':spec['output_shape'][0],'video.width':spec['output_shape'][1],'video.channels':3,'video.fps':float(fps),'video.codec':'h264','video.pix_fmt':'yuv420p','video.is_depth_map':False,'has_audio':False}}
     data=root/'data/chunk-000'/f'episode_{index:06d}.parquet';data.parent.mkdir(parents=True,exist_ok=True);pq.write_table(pa.table(columns),data,compression='snappy')
-    paths={camera:root/'videos/chunk-000'/camera/f'episode_{index:06d}.mp4' for camera in schema['cameras']}
-    for attempt in range(2):
-        for camera,spec in schema['cameras'].items():
-            if spec['kind']=='jpg_timestamp_aligned':
-                source_camera='hand_left' if 'left_wrist' in camera else 'hand_right'
-                encode_wrist(ep,source_camera,target,paths[camera],fps)
-            elif spec['kind']=='h265_timestamp_aligned':
-                encode_h265_aligned(ep,spec,target,paths[camera],fps,h265_backends)
-            else: raise ValueError(f'unknown camera kind: {spec["kind"]}')
-        errors=validate_episode_output(root,index,len(target),list(schema['cameras']))
-        if not errors: break
-        for path in paths.values():
-            path.unlink(missing_ok=True)
+    errors=[]
     episode_stats={key:stats_for(value) for key,value in numeric.items()}
     episode_stats.update({key:rgb_range_stats(len(target)) for key in schema['cameras']})
     return {'episode_index':index,'tasks':[task['name']],'length':len(target),'dataset_from_index':offset,'dataset_to_index':offset+len(target),'original_episode_id':ep.name,'source_task_id':meta['task_id'],'features':features,'stats':episode_stats,'validation_errors':errors}
 
 def main() -> None:
-    p=argparse.ArgumentParser();p.add_argument('--input',type=Path,required=True,help='原始 dataset/618data；也兼容辅助预检产生的分组输出');p.add_argument('--output',type=Path,required=True);p.add_argument('--schema',type=Path,default=REPO_ROOT/'config/618_lerobot_schema.json');p.add_argument('--task-map',type=Path,default=REPO_ROOT/'config/task_id_map.json');p.add_argument('--fields',type=Path,default=REPO_ROOT/'config/618_field_definitions.json');p.add_argument('--workers',type=int,default=8);p.add_argument('--cuda-workers',type=int,default=4);p.add_argument('--qsv-workers',type=int,default=2);p.add_argument('--min-duration-s',type=float,default=8.0);a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--input',type=Path,required=True,help='原始 dataset/618data；也兼容辅助预检产生的分组输出');p.add_argument('--output',type=Path,required=True);p.add_argument('--schema',type=Path,default=REPO_ROOT/'config/618_lerobot_schema.json');p.add_argument('--task-map',type=Path,default=REPO_ROOT/'config/task_id_map.json');p.add_argument('--fields',type=Path,default=REPO_ROOT/'config/618_field_definitions.json');p.add_argument('--workers',type=int,default=8);p.add_argument('--cuda-workers',type=int,default=4);p.add_argument('--qsv-workers',type=int,default=0);p.add_argument('--min-duration-s',type=float,default=8.0);a=p.parse_args()
     if a.output.exists(): raise SystemExit(f'输出已存在: {a.output}')
     schema=read_json(a.schema); field_definitions=read_json(a.fields); schema.update(field_definitions); mapping=read_json(a.task_map)['tasks']; a.output.mkdir(parents=True)
     raw_layout=any((child/'meta_info.json').is_file() for child in a.input.iterdir() if child.is_dir())
@@ -204,21 +211,51 @@ def main() -> None:
     if raw_layout:
         with (a.output/'conversion_rejected.csv').open('w',newline='',encoding='utf8') as file:
             csv.writer(file).writerows([['episode_uuid','task_id','rejection'],*rejected])
-    plans=[]; all_jobs=[]
+    plans=[]; prepare_jobs=[]; h265_jobs=[]; jpg_jobs=[]
     for tid,spec in sorted(mapping.items(),key=lambda x:x[1]['order']):
         source=a.input/spec['directory']; eps=raw_groups[spec['directory']] if raw_layout else (sorted(x for x in source.iterdir() if x.is_dir()) if source.exists() else [])
         root=a.output/spec['directory']; (root/'meta').mkdir(parents=True)
-        lengths=[len(timestamps(ep/'camera/head_color/head_color.txt')) for ep in eps]
+        targets=[timestamps(ep/'camera/head_color/head_color.txt') for ep in eps]
+        lengths=[len(target) for target in targets]
         offsets=np.cumsum([0,*lengths[:-1]]).tolist()
         jobs=[(ep,i,offset,root,schema,spec) for i,(ep,offset) in enumerate(zip(eps,offsets))]
-        plans.append({'spec':spec,'root':root,'lengths':lengths,'start':len(all_jobs),'count':len(jobs)})
-        all_jobs.extend(jobs)
-    lanes=video_process_lanes(a.workers,a.cuda_workers,a.qsv_workers)
-    print('process_lanes',[(lane.name,lane.workers) for lane in lanes],flush=True)
-    all_results=run_routed_process_jobs(convert_episode,all_jobs,lanes)
+        plans.append({'spec':spec,'root':root,'lengths':lengths,'start':len(prepare_jobs),'count':len(jobs)})
+        prepare_jobs.extend(jobs)
+        for index,(ep,target) in enumerate(zip(eps,targets)):
+            for camera,camera_spec in schema['cameras'].items():
+                job=(ep,index,root,camera,camera_spec,target,int(schema['fps']))
+                if camera_spec['kind']=='h265_timestamp_aligned': h265_jobs.append(job)
+                elif camera_spec['kind']=='jpg_timestamp_aligned': jpg_jobs.append(job)
+                else: raise ValueError(f'unknown camera kind: {camera_spec["kind"]}')
+    prepare_workers=max(1,min(a.workers,len(prepare_jobs) or 1))
+    prepare_lanes=[ProcessLane('prepare',prepare_workers,None)]
+    all_results=run_routed_process_jobs(prepare_episode,prepare_jobs,prepare_lanes)
+    if a.workers==1:
+        h265_lanes=video_process_lanes(1,min(a.cuda_workers,1),0 if a.cuda_workers else min(a.qsv_workers,1))
+        h265_results=run_routed_process_jobs(convert_camera,h265_jobs,h265_lanes)
+        jpg_results=run_routed_process_jobs(convert_camera,jpg_jobs,[ProcessLane('jpg_cpu',1,('cpu','qsv','cuda'))])
+    else:
+        h265_workers=max(1,min(a.workers-1,a.cuda_workers+a.qsv_workers if a.cuda_workers+a.qsv_workers else a.workers-1))
+        jpg_workers=max(1,a.workers-h265_workers)
+        h265_lanes=video_process_lanes(h265_workers,min(a.cuda_workers,h265_workers),min(a.qsv_workers,max(0,h265_workers-min(a.cuda_workers,h265_workers))))
+        jpg_lanes=[ProcessLane('jpg_cpu',jpg_workers,('cpu','qsv','cuda'))]
+        h265_results,jpg_results=run_process_job_groups([
+            (convert_camera,h265_jobs,h265_lanes),
+            (convert_camera,jpg_jobs,jpg_lanes),
+        ])
+    print('camera_process_lanes',[(lane.name,lane.workers) for lane in h265_lanes],('jpg_cpu',1 if a.workers==1 else jpg_workers),flush=True)
+    camera_errors={}
+    for camera_result in [*h265_results,*jpg_results]:
+        if camera_result['error']:
+            key=(camera_result['root'],camera_result['episode_index'])
+            camera_errors.setdefault(key,[]).append(camera_result['error'])
     for plan in plans:
         spec=plan['spec']; root=plan['root']; lengths=plan['lengths']; start=plan['start']
         result=all_results[start:start+plan['count']]
+        for episode_result in result:
+            key=(str(root),episode_result['episode_index'])
+            validation=validate_episode_output(root,episode_result['episode_index'],episode_result['length'],list(schema['cameras']))
+            episode_result['validation_errors']=[*camera_errors.get(key,[]),*validation]
         features={'timestamp':{'dtype':'float32','shape':[1],'names':None},'frame_index':{'dtype':'int64','shape':[1],'names':None},'episode_index':{'dtype':'int64','shape':[1],'names':None},'index':{'dtype':'int64','shape':[1],'names':None},'task_index':{'dtype':'int64','shape':[1],'names':None}}
         if result: features.update(result[0]['features'])
         info={'codebase_version':'v2.1','robot_type':'A2D','fps':schema['fps'],'total_episodes':len(result),'total_frames':sum(lengths),'total_tasks':1,'total_videos':len(schema['cameras'])*len(result),'total_chunks':1,'chunks_size':1000,'splits':{'train':f'0:{len(result)}'},'data_path':'data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet','video_path':'videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4','features':features}
