@@ -1,0 +1,10 @@
+# 原始数据、生成数据和大文件均不进入代码版本管理。
+dataset/
+output/
+sample_dataset.zip
+.venv*/
+__pycache__/
+*.py[cod]
+*.log
+.vscode/
+debug.log
