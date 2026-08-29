@@ -17,6 +17,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 from packages.robot_data.ffmpeg_io import video_frame_count
 
 
@@ -156,8 +158,8 @@ def convert_episode(args: tuple[Path,int,int,Path,dict,dict]) -> dict:
             values=h5_series(h5,spec['source'],target,spec['shape']); numeric[output]=values; columns[output]=float_column(values,spec['shape']); features[output]={'dtype':'float32','shape':spec['shape'],'names':None}
     # Keep the named source streams above for traceability, and add the two canonical
     # LeRobot keys required by off-the-shelf ACT (`observation.state` and `action`).
-    state=np.concatenate([numeric[key] for key in schema['state_features']],axis=1)
-    action=np.concatenate([numeric[key] for key in schema['action_features']],axis=1)
+    state=np.concatenate([numeric[key] for key in schema['state_canonical']['sources']],axis=1)
+    action=np.concatenate([numeric[key] for key in schema['action_canonical']['sources']],axis=1)
     numeric['observation.state']=state; numeric['action']=action
     columns['observation.state']=float_column(state,[int(state.shape[1])]); columns['action']=float_column(action,[int(action.shape[1])])
     features['observation.state']={'dtype':'float32','shape':[int(state.shape[1])],'names':None}
@@ -187,9 +189,9 @@ def convert_episode(args: tuple[Path,int,int,Path,dict,dict]) -> dict:
     return {'episode_index':index,'tasks':[task['name']],'length':len(target),'dataset_from_index':offset,'dataset_to_index':offset+len(target),'original_episode_id':ep.name,'source_task_id':meta['task_id'],'features':features,'stats':episode_stats,'validation_errors':errors}
 
 def main() -> None:
-    p=argparse.ArgumentParser();p.add_argument('--input',type=Path,required=True,help='原始 dataset/618data；也兼容辅助预检产生的分组输出');p.add_argument('--output',type=Path,required=True);p.add_argument('--schema',type=Path,default=Path(__file__).parent.parent/'config/618_lerobot_schema.json');p.add_argument('--task-map',type=Path,default=Path(__file__).parent.parent/'config/task_id_map.json');p.add_argument('--workers',type=int,default=3);p.add_argument('--min-duration-s',type=float,default=8.0);a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--input',type=Path,required=True,help='原始 dataset/618data；也兼容辅助预检产生的分组输出');p.add_argument('--output',type=Path,required=True);p.add_argument('--schema',type=Path,default=REPO_ROOT/'config/618_lerobot_schema.json');p.add_argument('--task-map',type=Path,default=REPO_ROOT/'config/task_id_map.json');p.add_argument('--fields',type=Path,default=REPO_ROOT/'config/618_field_definitions.json');p.add_argument('--workers',type=int,default=3);p.add_argument('--min-duration-s',type=float,default=8.0);a=p.parse_args()
     if a.output.exists(): raise SystemExit(f'输出已存在: {a.output}')
-    schema=read_json(a.schema); mapping=read_json(a.task_map)['tasks']; a.output.mkdir(parents=True)
+    schema=read_json(a.schema); field_definitions=read_json(a.fields); schema.update(field_definitions); mapping=read_json(a.task_map)['tasks']; a.output.mkdir(parents=True)
     raw_layout=any((child/'meta_info.json').is_file() for child in a.input.iterdir() if child.is_dir())
     raw_groups,rejected=collect_raw_episodes(a.input,mapping,a.min_duration_s) if raw_layout else ({},[])
     if raw_layout:
