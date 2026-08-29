@@ -10,7 +10,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from common_lerobot import episodes, episode_parquet, tasks
+from src.clean_tools.common_lerobot import episodes, episode_parquet, tasks
 
 
 def smooth_start(

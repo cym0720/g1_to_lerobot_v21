@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
-from common_lerobot import (
+from src.clean_tools.common_lerobot import (
     tasks,
     episodes,
     table,
