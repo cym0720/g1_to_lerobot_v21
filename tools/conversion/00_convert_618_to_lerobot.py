@@ -17,6 +17,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from packages.robot_data.ffmpeg_io import video_frame_count
+
 
 def read_json(path: Path) -> dict: return json.loads(path.read_text(encoding="utf8"))
 
@@ -114,7 +116,7 @@ def validate_episode_output(root: Path, index: int, expected: int, cameras: list
     for camera in cameras:
         path=root/'videos/chunk-000'/camera/f'episode_{index:06d}.mp4'
         if not path.exists(): errors.append(f'missing_video:{camera}')
-        elif video_frames(path) != expected: errors.append(f'video_frames:{camera}')
+        elif video_frame_count(path) != expected: errors.append(f'video_frames:{camera}')
     return errors
 
 def stats_for(values: np.ndarray) -> dict:

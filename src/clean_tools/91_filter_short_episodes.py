@@ -2,7 +2,7 @@
 from __future__ import annotations
 import argparse, csv, shutil
 from pathlib import Path
-from src.clean_tools.common_lerobot import (
+from packages.robot_data.lerobot_v21 import (
     tasks,
     episodes,
     copy_dataset_skeleton,

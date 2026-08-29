@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse, csv, shutil, subprocess
 from pathlib import Path
 import numpy as np, pyarrow as pa, pyarrow.parquet as pq
-from src.clean_tools.common_lerobot import (
+from packages.robot_data.lerobot_v21 import (
     tasks,
     episodes,
     copy_dataset_skeleton,
