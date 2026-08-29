@@ -7,7 +7,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-from packages.robot_data.ffmpeg_io import encode_h265_aligned, video_frame_count
+from packages.ffmpeg_io import encode_h265_aligned, video_frame_count
 
 p = argparse.ArgumentParser()
 p.add_argument('--source', type=Path, required=True)

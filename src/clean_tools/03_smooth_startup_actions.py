@@ -15,8 +15,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from packages.robot_data.filters import smooth_startup_action
-from packages.robot_data.lerobot_v21 import episodes, episode_parquet, tasks
+from packages.filters import smooth_startup_action
+from packages.lerobot_v21 import episodes, episode_parquet, tasks
 
 
 def arrow_array(values: np.ndarray, field: pa.Field) -> pa.Array:

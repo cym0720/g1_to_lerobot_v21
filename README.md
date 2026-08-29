@@ -5,7 +5,7 @@
 ## 目录
 
 - `config/`：任务 ID 映射、相机和数据字段配置。
-- `src/clean_tools/`：任务级清洗步骤与主流水线编排。`n- `packages/robot_data/`：可复用的 LeRobot v2.1 路径工具、action 低通滤波、FFmpeg 编解码/探测基础设施。
+- `src/clean_tools/`：任务级清洗步骤与主流水线编排。`n- `packages/`：可复用的 LeRobot v2.1 路径工具、action 低通滤波、FFmpeg 编解码/探测基础设施。
 - `tools/conversion/`：数据格式转换与可选 v2.1→v3.0 导出工具。
 - `tools/testing/`：原始数据检查、LeRobot 全量读取与 ACT smoke test。
 - `dataset/`：原始数据（Git 忽略）。

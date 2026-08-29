@@ -10,7 +10,7 @@ if str(REPO_ROOT) not in sys.path:
 import numpy as np
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
-from packages.robot_data.lerobot_v21 import (
+from packages.lerobot_v21 import (
     tasks,
     episodes,
     table,

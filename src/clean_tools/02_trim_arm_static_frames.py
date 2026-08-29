@@ -8,7 +8,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 import numpy as np, pyarrow as pa, pyarrow.parquet as pq
-from packages.robot_data.lerobot_v21 import (
+from packages.lerobot_v21 import (
     tasks,
     episodes,
     copy_dataset_skeleton,
