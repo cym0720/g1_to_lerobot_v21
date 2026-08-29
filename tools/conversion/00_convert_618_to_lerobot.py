@@ -22,7 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from packages.ffmpeg_io import encode_h265_aligned as encode_h265_ffmpeg, video_frame_count
+from packages.ffmpeg_io import encode_h265_aligned as encode_h265_ffmpeg, encode_jpeg_sequence, video_frame_count
 
 
 def read_json(path: Path) -> dict: return json.loads(path.read_text(encoding="utf8"))
@@ -107,17 +107,11 @@ def encode_h265_aligned(ep: Path, spec: dict, target: np.ndarray, dest: Path, fp
             raise
         encode_h265_aligned_pyav(ep, spec, target, dest, fps)
 def encode_wrist(ep: Path, camera: str, target: np.ndarray, dest: Path, fps: int) -> None:
-    files=sorted((ep/'camera'/camera/'color').glob('*.jpg'))
-    source_ts=np.asarray([int(x.stem) for x in files],dtype=np.int64); selected=[files[i] for i in nearest(source_ts,target)]
-    dest.parent.mkdir(parents=True,exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='618_frames_') as temp:
-        td=Path(temp)
-        for i,src in enumerate(selected):
-            target_file=td/f'{i:06d}.jpg'
-            try: os.link(src,target_file)
-            except OSError: shutil.copy2(src,target_file)
-        subprocess.run(["ffmpeg","-y","-loglevel","error","-framerate",str(fps),"-i",str(td/'%06d.jpg'),"-frames:v",str(len(selected)),"-c:v","libx264","-pix_fmt","yuv420p","-crf","20",str(dest)],check=True)
-
+    files = sorted((ep / 'camera' / camera / 'color').glob('*.jpg'))
+    source_ts = np.asarray([int(path.stem) for path in files], dtype=np.int64)
+    selected = [files[index] for index in nearest(source_ts, target)]
+    backend = encode_jpeg_sequence(selected, dest, fps)
+    print(f"{ep.name} {camera} backend={backend}")
 def video_frames(path: Path) -> int:
     result=subprocess.run(["ffprobe","-v","error","-select_streams","v:0","-count_frames","-show_entries","stream=nb_read_frames","-of","default=nokey=1:noprint_wrappers=1",str(path)],capture_output=True,text=True,check=True)
     return int(result.stdout.strip())

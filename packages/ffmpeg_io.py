@@ -96,3 +96,40 @@ def rgb_video_stats(path: Path, chunk_frames: int = 8) -> dict:
     mean = total / pixels
     variance = np.maximum(square / pixels - np.square(mean), 0.0)
     return {"min": lo.reshape(3, 1, 1).tolist(), "max": hi.reshape(3, 1, 1).tolist(), "mean": mean.reshape(3, 1, 1).tolist(), "std": np.sqrt(variance).reshape(3, 1, 1).tolist(), "count": [frames]}
+
+def encode_jpeg_sequence(selected_files: list[Path], destination: Path, fps: int, preferred_backends: tuple[str, ...] = ("cpu", "qsv", "cuda")) -> str:
+    """Encode timestamp-aligned JPG files through NVENC, QSV, or libx264."""
+    import os
+    import shutil
+    import tempfile
+    if not selected_files:
+        raise ValueError("no JPEG frames selected")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    failures = []
+    with tempfile.TemporaryDirectory(prefix="lerobot_jpg_") as temporary:
+        directory = Path(temporary)
+        for index, source in enumerate(selected_files):
+            target = directory / "{:06d}.jpg".format(index)
+            try:
+                os.link(source, target)
+            except OSError:
+                shutil.copy2(source, target)
+        for backend in preferred_backends:
+            try:
+                destination.unlink(missing_ok=True)
+                base = ["-framerate", str(fps), "-i", str(directory / "%06d.jpg"), "-frames:v", str(len(selected_files)), "-r", str(fps), "-pix_fmt", "yuv420p"]
+                if backend == "cuda":
+                    command = [*base, "-c:v", "h264_nvenc", "-preset", "p4", str(destination)]
+                elif backend == "qsv":
+                    command = [*base, "-c:v", "h264_qsv", "-global_quality", "23", str(destination)]
+                else:
+                    command = [*base, "-c:v", "libx264", "-crf", "20", str(destination)]
+                run_ffmpeg(command)
+                count = video_frame_count(destination)
+                if count != len(selected_files):
+                    raise RuntimeError("frame count {} != {}".format(count, len(selected_files)))
+                return backend
+            except (subprocess.CalledProcessError, RuntimeError) as error:
+                destination.unlink(missing_ok=True)
+                failures.append("{}: {}".format(backend, error))
+    raise FFmpegBackendError("; ".join(failures))
