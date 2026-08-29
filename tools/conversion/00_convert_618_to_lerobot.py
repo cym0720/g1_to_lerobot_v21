@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import concurrent.futures
 import csv
 import json
@@ -18,6 +19,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from packages.robot_data.ffmpeg_io import video_frame_count
 
