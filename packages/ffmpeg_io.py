@@ -59,3 +59,40 @@ def encode_h265_aligned(source: Path, source_timestamps: np.ndarray, target_time
             destination.unlink(missing_ok=True)
             failures.append("{}: {}".format(backend, error))
     raise FFmpegBackendError("; ".join(failures))
+
+def _video_size(path: Path) -> tuple[int, int]:
+    result = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)], capture_output=True, text=True, check=True)
+    width, height = result.stdout.strip().split(",")
+    return int(width), int(height)
+
+
+def rgb_video_stats(path: Path, chunk_frames: int = 8) -> dict:
+    """Decode RGB through FFmpeg and stream channel statistics without frame caching."""
+    width, height = _video_size(path)
+    frame_bytes = width * height * 3
+    command = ["ffmpeg", "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert process.stdout is not None
+    lo = np.full(3, np.inf); hi = np.full(3, -np.inf)
+    total = np.zeros(3, dtype=np.float64); square = np.zeros(3, dtype=np.float64)
+    frames = 0
+    while True:
+        raw = process.stdout.read(frame_bytes * chunk_frames)
+        if not raw:
+            break
+        if len(raw) % frame_bytes:
+            process.kill()
+            raise RuntimeError("FFmpeg emitted an incomplete RGB frame")
+        data = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 3).astype(np.float64) / 255.0
+        lo = np.minimum(lo, data.min(axis=0)); hi = np.maximum(hi, data.max(axis=0))
+        total += data.sum(axis=0); square += np.square(data).sum(axis=0)
+        frames += len(raw) // frame_bytes
+    stderr = process.stderr.read().decode("utf8", errors="replace") if process.stderr else ""
+    if process.wait() != 0:
+        raise RuntimeError("FFmpeg RGB decode failed: " + stderr[-1000:])
+    if not frames:
+        raise ValueError("empty video: {}".format(path))
+    pixels = frames * width * height
+    mean = total / pixels
+    variance = np.maximum(square / pixels - np.square(mean), 0.0)
+    return {"min": lo.reshape(3, 1, 1).tolist(), "max": hi.reshape(3, 1, 1).tolist(), "mean": mean.reshape(3, 1, 1).tolist(), "std": np.sqrt(variance).reshape(3, 1, 1).tolist(), "count": [frames]}
