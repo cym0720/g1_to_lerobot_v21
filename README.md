@@ -50,3 +50,4 @@ meta/stats.json
 
 - [ ] 低通滤波：基于代表性遥操轨迹确定 action 起始段平滑的截止频率、持续时间和交叉淡入参数，并完成前后动作曲线与 ACT 训练效果对比。
 - [ ] FFmpeg 解码加速：在 `experiment/process-parallel-conversion` 分支中，以 FFmpeg 替代 Python/PyAV 的 H.265 逐帧解码；实现跨任务全局进程池、限制单进程线程数，并以相同输入测试吞吐、输出帧数与 LeRobot v2.1 完整读取一致性。
+- [ ] RGB 通道统计：在 FFmpeg 解码/转码链路中以 `rgb24` 原始帧流传给流式累加器，计算每路相机的 R/G/B `mean`、`std`、`min`、`max` 和像素计数；不缓存整段视频，不影响 LeRobot 视频输出。默认关闭，仅在 `--benchmark` 或显式 `--compute-rgb-stats` 时运行；结果写入 benchmark 报告，验证后再用于最终 `stats.json`。
