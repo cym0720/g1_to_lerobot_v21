@@ -22,7 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from packages.robot_data.ffmpeg_io import video_frame_count
+from packages.robot_data.ffmpeg_io import encode_h265_aligned as encode_h265_ffmpeg, video_frame_count
 
 
 def read_json(path: Path) -> dict: return json.loads(path.read_text(encoding="utf8"))
@@ -75,7 +75,7 @@ def h5_series(h5: h5py.File, data_key: str, target: np.ndarray, shape: list[int]
     n=min(len(values),len(times)); values=values[:n]; times=times[:n]
     return np.asarray(values[nearest(times,target)],dtype=np.float32)
 
-def encode_h265_aligned(ep: Path, spec: dict, target: np.ndarray, dest: Path, fps: int) -> None:
+def encode_h265_aligned_pyav(ep: Path, spec: dict, target: np.ndarray, dest: Path, fps: int) -> None:
     """Timestamp-align an encoded RGB/fisheye stream to the canonical head clock."""
     source_times=timestamps(ep/spec['timestamp_source']); selected=nearest(source_times,target)
     wanted: dict[int,int]={}
@@ -96,6 +96,16 @@ def encode_h265_aligned(ep: Path, spec: dict, target: np.ndarray, dest: Path, fp
         for packet in stream.encode(): writer.mux(packet)
     if written != len(target): raise ValueError(f'{ep.name}: {spec["source"]} decoded {written}/{len(target)} aligned frames')
 
+def encode_h265_aligned(ep: Path, spec: dict, target: np.ndarray, dest: Path, fps: int) -> None:
+    """Use FFmpeg hardware decode/encode; retain PyAV only for duplicate-frame compatibility."""
+    source_times = timestamps(ep / spec['timestamp_source'])
+    try:
+        backend = encode_h265_ffmpeg(ep / spec['source'], source_times, target, dest, fps, spec.get('crop'))
+        print(f"{ep.name} {spec['source']} backend={backend}")
+    except ValueError as error:
+        if 'duplicate timestamp-aligned' not in str(error):
+            raise
+        encode_h265_aligned_pyav(ep, spec, target, dest, fps)
 def encode_wrist(ep: Path, camera: str, target: np.ndarray, dest: Path, fps: int) -> None:
     files=sorted((ep/'camera'/camera/'color').glob('*.jpg'))
     source_ts=np.asarray([int(x.stem) for x in files],dtype=np.int64); selected=[files[i] for i in nearest(source_ts,target)]
