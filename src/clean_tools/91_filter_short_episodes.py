@@ -2,7 +2,7 @@
 from __future__ import annotations
 import argparse, csv, shutil
 from pathlib import Path
-from common_lerobot import (
+from src.clean_tools.common_lerobot import (
     tasks,
     episodes,
     copy_dataset_skeleton,
@@ -16,20 +16,30 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--input", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
-    p.add_argument("--min-duration-s", type=float, default=8.0, help="按 LeRobot fps 计算的最短轨迹时长（秒）")
+    p.add_argument(
+        "--min-duration-s", type=float, default=8.0, help="按 LeRobot fps 计算的最短轨迹时长（秒）"
+    )
     a = p.parse_args()
     a.output.mkdir(parents=True, exist_ok=False)
     report = []
     for src in tasks(a.input):
         dst = a.output / src.name
         copy_dataset_skeleton(src, dst)
-        fps = float(__import__('json').loads((dst / 'meta/info.json').read_text(encoding='utf8'))['fps'])
+        fps = float(
+            __import__("json").loads((dst / "meta/info.json").read_text(encoding="utf8"))["fps"]
+        )
         kept = []
         for e in episodes(dst):
             duration_s = e["length"] / fps
             bad = duration_s < a.min_duration_s
             report.append(
-                [src.name, e["episode_index"], e["length"], f"{duration_s:.3f}", "rejected_short" if bad else "kept"]
+                [
+                    src.name,
+                    e["episode_index"],
+                    e["length"],
+                    f"{duration_s:.3f}",
+                    "rejected_short" if bad else "kept",
+                ]
             )
             if bad:
                 reject = (

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse, csv, shutil, subprocess
 from pathlib import Path
 import numpy as np, pyarrow as pa, pyarrow.parquet as pq
-from common_lerobot import (
+from src.clean_tools.common_lerobot import (
     tasks,
     episodes,
     copy_dataset_skeleton,
@@ -71,15 +71,18 @@ def main():
                 continue
             start = max(0, int(np.flatnonzero(valid)[0]) - a.padding_frames)
             end = min(len(q) - 1, int(np.flatnonzero(valid)[-1]) + a.padding_frames)
-            trimmed=t.slice(start, end - start + 1)
-            length=end-start+1
+            trimmed = t.slice(start, end - start + 1)
+            length = end - start + 1
             # The output video begins at frame/time zero, so its corresponding
             # parquet columns must use the same new CFR clock.
             for column, values in (
-                ('timestamp', pa.array(np.arange(length,dtype=np.float32)/fps, type=pa.float32())),
-                ('frame_index', pa.array(np.arange(length,dtype=np.int64))),
+                (
+                    "timestamp",
+                    pa.array(np.arange(length, dtype=np.float32) / fps, type=pa.float32()),
+                ),
+                ("frame_index", pa.array(np.arange(length, dtype=np.int64))),
             ):
-                trimmed=trimmed.set_column(trimmed.schema.get_field_index(column),column,values)
+                trimmed = trimmed.set_column(trimmed.schema.get_field_index(column), column, values)
             pq.write_table(
                 trimmed,
                 episode_parquet(dst, e["episode_index"]),
@@ -99,16 +102,27 @@ def main():
             new.append(e)
             report.append([src.name, e["episode_index"], len(q), f"{start}:{end}"])
         # Rebuild task-local global indices after variable-length trims.
-        offset=0
+        offset = 0
         for e in new:
-            path=episode_parquet(dst,e['episode_index']); current=pq.read_table(path); length=current.num_rows
-            current=current.set_column(current.schema.get_field_index('index'),'index',pa.array(np.arange(length,dtype=np.int64)+offset))
-            pq.write_table(current,path,compression='snappy')
-            e['dataset_from_index']=offset; e['dataset_to_index']=offset+length
+            path = episode_parquet(dst, e["episode_index"])
+            current = pq.read_table(path)
+            length = current.num_rows
+            current = current.set_column(
+                current.schema.get_field_index("index"),
+                "index",
+                pa.array(np.arange(length, dtype=np.int64) + offset),
+            )
+            pq.write_table(current, path, compression="snappy")
+            e["dataset_from_index"] = offset
+            e["dataset_to_index"] = offset + length
             offset += length
-        info=__import__('json').loads((dst/'meta/info.json').read_text())
-        info['total_frames']=offset; info['total_episodes']=len(new); info['total_videos']=3*len(new)
-        (dst/'meta/info.json').write_text(__import__('json').dumps(info,indent=2),encoding='utf8')
+        info = __import__("json").loads((dst / "meta/info.json").read_text())
+        info["total_frames"] = offset
+        info["total_episodes"] = len(new)
+        info["total_videos"] = 3 * len(new)
+        (dst / "meta/info.json").write_text(
+            __import__("json").dumps(info, indent=2), encoding="utf8"
+        )
         write_episodes(dst, new)
     with (a.output / "trim_report.csv").open("w", newline="", encoding="utf8") as f:
         csv.writer(f).writerows([["task", "episode", "source_frames", "result"], *report])

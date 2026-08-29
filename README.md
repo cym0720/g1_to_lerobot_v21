@@ -1,24 +1,48 @@
-# AgiBot World → LeRobot 清洗流水线
+# 618data → LeRobot v2.1 清洗流水线
 
-本项目针对 AgiBot World Alpha 的 `observations/` + `meta_info/` 样例目录。数据先按**任务目录**转换成独立的 LeRobot v2.1 数据集；随后步骤 1、2、3 也始终按任务独立处理。
+本仓库将原始 `dataset/618data` 转为按任务拆分的 LeRobot v2.1 数据集，并在转换结果上完成时长校验、全臂静止帧裁剪、起始 action 平滑、离群轨迹审查和最终统计重算。原始数据与最终输出均不纳入 Git。
 
-官方 AgiBot World 仓库推荐 [any4lerobot](https://github.com/Tavish9/any4lerobot) 做 AgiBot→LeRobot 转换。本项目已将其下载到 `vendor/any4lerobot` 作为字段和格式参考。由于当前样例使用 Alpha 的 `meta_info/<task>/<uuid>/proprio_joints.h5` 布局，而该工具当前版本面向另一版 `proprio_stats` 布局，`0_convert...py` 是兼容这一样例的适配器。
+## 目录
 
-> 所有脚本默认输出新目录，绝不修改原始数据。
+- `config/`：任务 ID 映射、相机和数据字段配置。
+- `src/clean_tools/`：可复用的清洗实现和主流水线。
+- `tools/conversion/`：数据格式转换与可选 v2.1→v3.0 导出工具。
+- `tools/testing/`：原始数据检查、LeRobot 全量读取与 ACT smoke test。
+- `dataset/`：原始数据（Git 忽略）。
+- `output/`：转换、清洗、报告和训练产物（Git 忽略）。
 
-## 顺序
+## 主流程
 
 ```powershell
-python clean_tools/01_convert_agibot_alpha_to_lerobot.py --src sample_dataset/sample_dataset --output output/00_lerobot
-python clean_tools/02_filter_short_episodes.py --input output/00_lerobot --output output/01_length_filtered --min-frames 100
-python clean_tools/03_trim_arm_static_frames.py --input output/01_length_filtered --output output/02_trimmed --arm-joint-indices 15,16,17,18,19,20,21,22,23,24,25,26,27,28
-python clean_tools/04_review_outliers.py --input output/02_trimmed --review-dir output/03_review --tail-frames 30
-# 编辑 output/03_review/<task>/delete_list.txt 后：
-python clean_tools/04_review_outliers.py --input output/02_trimmed --review-dir output/03_review --apply
+# 从仓库根目录运行；默认使用 8 个 worker
+powershell -ExecutionPolicy Bypass -File src/clean_tools/run_618_pipeline.ps1 `
+  -InputRoot dataset/618data `
+  -OutputRoot output/618_cleaning_trial `
+  -Workers 8
 ```
 
-`--arm-joint-indices` 必须对应实际 34 维关节向量中左右机械臂的索引。示例为常见 G1 排列的暂定值；请在投入完整数据前依据设备关节顺序确认。静止定义严格为：该列表中的**每一个**关节相邻帧变化均不超过阈值。
+主流程顺序如下：
 
-## 输出格式
+1. `tools/conversion/00_convert_618_to_lerobot.py`：原始 618data 转为每任务一个 LeRobot v2.1 原始数据集。
+2. `tools/testing/01_validate_lerobot_v21_read.py`：完整读取全部 Parquet 与视频，输出只读校验报告。
+3. `src/clean_tools/02_trim_arm_static_frames.py`：用全部 14 个 arm joint 判断首尾静止帧，并保留两端各 5 帧空白帧。
+4. `src/clean_tools/03_smooth_startup_actions.py`：只对 action 的开始 1 秒进行因果低通平滑并交叉淡入，不改变 state、视频、时间戳。
+5. `src/clean_tools/05_recompute_metadata_stats.py`：从最终数据重算 LeRobot v2.1 metadata 与统计信息。
 
-每个任务成为一个独立 LeRobot v2.1 根目录，含 `data/chunk-000/*.parquet`、`videos/chunk-000/.../*.mp4`、`meta/info.json`、`meta/episodes.jsonl`、`meta/stats.json`。原始 H5 中全部非空 state/action 时序字段会写进 Parquet；RGB 视频原样复制。深度 PNG 会作为 `depth_raw/` 附属模态保留（LeRobot v2.1 对深度序列没有统一的视频编码约定），步骤 1、2、3 都会同步处理它。
+`src/clean_tools/04_review_outliers.py` 用于单独生成离群轨迹审查视频；确认删除清单后才会执行选择性删除。
+
+## 数据集输出
+
+每一个任务目录是独立的 LeRobot v2.1 数据集，包含：
+
+```text
+data/chunk-000/episode_*.parquet
+videos/chunk-000/<camera_field>/episode_*.mp4
+meta/info.json
+meta/tasks.jsonl
+meta/episodes.jsonl
+meta/episodes_stats.jsonl
+meta/stats.json
+```
+
+当前转换所有非深度相机流：头部 RGB、左右腕部 RGB、头部中心/左/右鱼眼 RGB；深度流明确不转换。
