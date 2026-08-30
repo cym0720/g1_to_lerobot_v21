@@ -28,7 +28,7 @@ def main() -> None:
         raise SystemExit(f"训练输出已存在，拒绝覆盖: {args.output}")
 
     command = [
-        str(args.python), "-m", "lerobot.scripts.train",
+        str(args.python), "-u", "-m", "lerobot.scripts.train",
         f"--dataset.repo_id={args.repo_id}",
         f"--dataset.root={args.dataset_root}",
         "--policy.type=act",
@@ -43,7 +43,7 @@ def main() -> None:
         "--save_checkpoint=false",
         "--wandb.enable=false",
     ]
-    environment = os.environ | {"HF_HUB_OFFLINE": "1", "PYTHONUTF8": "1"}
+    environment = os.environ | {"HF_HUB_OFFLINE": "1", "PYTHONUTF8": "1", "PYTHONUNBUFFERED": "1"}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     log_path = args.output.parent / f"{args.output.name}.log"
     losses: list[float] = []
