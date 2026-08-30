@@ -49,7 +49,7 @@ def load_frame(video: Path, frame_index: int, size: int) -> torch.Tensor:
     raise IndexError(f"{video}: missing frame {frame_index}")
 
 
-def load_sample(root: Path, episode: dict, start: int, chunk: int, image_size: int) -> dict[str, torch.Tensor]:
+def load_sample(root: Path, episode: dict, start: int, chunk: int, image_size: int, cameras: tuple[str, ...]) -> dict[str, torch.Tensor]:
     index = int(episode["episode_index"])
     table = pq.read_table(root / "data/chunk-000" / f"episode_{index:06d}.parquet", columns=["observation.state", "action"])
     state = np.asarray(table["observation.state"].to_pylist(), dtype=np.float32)
@@ -58,13 +58,15 @@ def load_sample(root: Path, episode: dict, start: int, chunk: int, image_size: i
     action_chunk = np.zeros((chunk, action.shape[1]), dtype=np.float32)
     action_chunk[: end - start] = action[start:end]
     is_pad = np.zeros(chunk, dtype=bool); is_pad[end - start :] = True
-    video = root / "videos/chunk-000/observation.images.cam_high_rgb" / f"episode_{index:06d}.mp4"
-    return {
+    batch = {
         "observation.state": torch.from_numpy(state[start]).unsqueeze(0),
-        "observation.images.cam_high_rgb": load_frame(video, start, image_size).unsqueeze(0),
         "action": torch.from_numpy(action_chunk).unsqueeze(0),
         "action_is_pad": torch.from_numpy(is_pad).unsqueeze(0),
     }
+    for camera in cameras:
+        video = root / "videos/chunk-000" / camera / f"episode_{index:06d}.mp4"
+        batch[camera] = load_frame(video, start, image_size).unsqueeze(0)
+    return batch
 
 
 def main() -> None:
@@ -75,6 +77,8 @@ def main() -> None:
     parser.add_argument("--chunk-size", type=int, default=16)
     parser.add_argument("--image-size", type=int, default=96)
     parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--three-cameras", action="store_true", help="Use head, left wrist, and right wrist simultaneously after resize.")
+    parser.add_argument("--fixed-sample", action="store_true", help="Repeat one real action chunk; recommended for a deterministic loss-decrease smoke test.")
     args = parser.parse_args()
     if args.steps < 10:
         raise SystemExit("--steps must be at least 10")
@@ -87,7 +91,15 @@ def main() -> None:
         raise SystemExit("expected native G1 20D observation.state/action")
     episodes = [json.loads(line) for line in (args.dataset_root / "meta/episodes.jsonl").read_text(encoding="utf8").splitlines() if line.strip()]
     meta_stats = json.loads((args.dataset_root / "meta/stats.json").read_text(encoding="utf8"))
-    image_key = "observation.images.cam_high_rgb"
+    cameras = ("observation.images.cam_high_rgb",)
+    if args.three_cameras:
+        cameras = (
+            "observation.images.cam_high_rgb",
+            "observation.images.cam_left_wrist_rgb",
+            "observation.images.cam_right_wrist_rgb",
+        )
+    if any(camera not in info["features"] for camera in cameras):
+        raise SystemExit(f"dataset lacks requested camera fields: {cameras}")
     config = ACTConfig(
         device="cpu", chunk_size=args.chunk_size, n_action_steps=1,
         vision_backbone="resnet18", pretrained_backbone_weights=None,
@@ -95,26 +107,26 @@ def main() -> None:
         use_vae=False, dropout=0.0,
         input_features={
             "observation.state": PolicyFeature(FeatureType.STATE, (20,)),
-            image_key: PolicyFeature(FeatureType.VISUAL, (3, args.image_size, args.image_size)),
+            **{camera: PolicyFeature(FeatureType.VISUAL, (3, args.image_size, args.image_size)) for camera in cameras},
         },
         output_features={"action": PolicyFeature(FeatureType.ACTION, (20,))},
     )
-    policy = ACTPolicy(config, {"observation.state": stats_to_tensors(meta_stats, "observation.state"), "action": stats_to_tensors(meta_stats, "action"), image_key: stats_to_tensors(meta_stats, image_key)})
+    policy = ACTPolicy(config, {"observation.state": stats_to_tensors(meta_stats, "observation.state"), "action": stats_to_tensors(meta_stats, "action"), **{camera: stats_to_tensors(meta_stats, camera) for camera in cameras}})
     policy.train()
     optimizer = torch.optim.AdamW(policy.get_optim_params(), lr=args.lr)
     losses: list[float] = []
     usable = [episode for episode in episodes if int(episode["length"]) >= args.chunk_size]
     for step in range(args.steps):
-        episode = usable[step % len(usable)]
-        start = (step * 7) % (int(episode["length"]) - args.chunk_size + 1)
-        batch = load_sample(args.dataset_root, episode, start, args.chunk_size, args.image_size)
+        episode = usable[0] if args.fixed_sample else usable[step % len(usable)]
+        start = 0 if args.fixed_sample else (step * 7) % (int(episode["length"]) - args.chunk_size + 1)
+        batch = load_sample(args.dataset_root, episode, start, args.chunk_size, args.image_size, cameras)
         loss, _ = policy(batch)
         optimizer.zero_grad(); loss.backward(); optimizer.step()
         value = float(loss.detach()); losses.append(value)
         print(f"step={step + 1}/{args.steps} loss={value:.7f}", flush=True)
     width = max(3, len(losses) // 4)
     first, last = float(np.mean(losses[:width])), float(np.mean(losses[-width:]))
-    report = {"runtime": "LeRobot v2.1 native ACTPolicy", "state_dim": 20, "action_dim": 20, "camera": image_key, "image_size": args.image_size, "steps": args.steps, "losses": losses, "first_window_mean": first, "last_window_mean": last, "loss_decreased": last < first}
+    report = {"runtime": "LeRobot v2.1 native ACTPolicy", "state_dim": 20, "action_dim": 20, "cameras": list(cameras), "image_size": args.image_size, "steps": args.steps, "fixed_sample": args.fixed_sample, "losses": losses, "first_window_mean": first, "last_window_mean": last, "loss_decreased": last < first}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2), encoding="utf8")
     print(json.dumps(report, indent=2), flush=True)
