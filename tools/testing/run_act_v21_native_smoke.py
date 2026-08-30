@@ -75,6 +75,10 @@ def predict(policy: ACTPolicy, batch: dict[str, torch.Tensor]) -> torch.Tensor:
     return policy.predict_action_chunk(inputs)
 
 
+def move_batch(batch: dict[str, torch.Tensor], device: str) -> dict[str, torch.Tensor]:
+    return {key: value.to(device, non_blocking=True) for key, value in batch.items()}
+
+
 def save_gt_plot(path: Path, ground_truth: np.ndarray, prediction: np.ndarray) -> None:
     from PIL import Image, ImageDraw, ImageFont
     image = Image.new("RGB", (1500, 1050), "white"); draw = ImageDraw.Draw(image)
@@ -109,11 +113,14 @@ def main() -> None:
     parser.add_argument("--fixed-sample", action="store_true", help="Repeat one real action chunk; recommended for a deterministic loss-decrease smoke test.")
     parser.add_argument("--gt-analysis-dir", type=Path, help="Optional held-out GT evaluation directory; reserves the final 20%% episodes for evaluation.")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     args = parser.parse_args()
     if args.steps < 10:
         raise SystemExit("--steps must be at least 10")
     if args.output.exists():
         raise SystemExit(f"refusing to overwrite: {args.output}")
+    if args.device == "cuda" and not torch.cuda.is_available():
+        raise SystemExit("--device cuda requested but CUDA PyTorch/GPU is unavailable")
     info = json.loads((args.dataset_root / "meta/info.json").read_text(encoding="utf8"))
     if info.get("codebase_version") != "v2.1":
         raise SystemExit("dataset is not LeRobot v2.1")
@@ -131,7 +138,7 @@ def main() -> None:
     if any(camera not in info["features"] for camera in cameras):
         raise SystemExit(f"dataset lacks requested camera fields: {cameras}")
     config = ACTConfig(
-        device="cpu", chunk_size=args.chunk_size, n_action_steps=1,
+        device=args.device, chunk_size=args.chunk_size, n_action_steps=1,
         vision_backbone="resnet18", pretrained_backbone_weights=None,
         dim_model=128, dim_feedforward=256, n_heads=4, n_encoder_layers=2, n_decoder_layers=1,
         use_vae=False, dropout=0.0,
@@ -142,7 +149,7 @@ def main() -> None:
         output_features={"action": PolicyFeature(FeatureType.ACTION, (20,))},
     )
     policy = ACTPolicy(config, {"observation.state": stats_to_tensors(meta_stats, "observation.state"), "action": stats_to_tensors(meta_stats, "action"), **{camera: stats_to_tensors(meta_stats, camera) for camera in cameras}})
-    policy.train()
+    policy.to(args.device); policy.train()
     optimizer = torch.optim.AdamW(policy.get_optim_params(), lr=args.lr)
     losses: list[float] = []
     usable = [episode for episode in episodes if int(episode["length"]) >= args.chunk_size]
@@ -153,21 +160,21 @@ def main() -> None:
     for step in range(args.steps):
         episode = train_episodes[0] if args.fixed_sample else train_episodes[int(rng.integers(len(train_episodes)))]
         start = 0 if args.fixed_sample else int(rng.integers(int(episode["length"]) - args.chunk_size + 1))
-        batch = load_sample(args.dataset_root, episode, start, args.chunk_size, args.image_size, cameras)
+        batch = move_batch(load_sample(args.dataset_root, episode, start, args.chunk_size, args.image_size, cameras), args.device)
         loss, _ = policy(batch)
         optimizer.zero_grad(); loss.backward(); optimizer.step()
         value = float(loss.detach()); losses.append(value)
         print(f"step={step + 1}/{args.steps} loss={value:.7f}", flush=True)
     width = max(3, len(losses) // 4)
     first, last = float(np.mean(losses[:width])), float(np.mean(losses[-width:]))
-    report = {"runtime": "LeRobot v2.1 native ACTPolicy", "state_dim": 20, "action_dim": 20, "cameras": list(cameras), "image_size": args.image_size, "steps": args.steps, "fixed_sample": args.fixed_sample, "losses": losses, "first_window_mean": first, "last_window_mean": last, "loss_decreased": last < first}
+    report = {"runtime": "LeRobot v2.1 native ACTPolicy", "device": args.device, "state_dim": 20, "action_dim": 20, "cameras": list(cameras), "image_size": args.image_size, "steps": args.steps, "fixed_sample": args.fixed_sample, "losses": losses, "first_window_mean": first, "last_window_mean": last, "loss_decreased": last < first}
     if args.gt_analysis_dir:
         policy.eval(); all_gt=[]; all_pred=[]
         with torch.no_grad():
             for episode in eval_episodes:
                 start = max(0, (int(episode["length"]) - args.chunk_size) // 2)
-                batch = load_sample(args.dataset_root, episode, start, args.chunk_size, args.image_size, cameras)
-                all_gt.append(batch["action"][0].numpy()); all_pred.append(predict(policy, batch)[0].numpy())
+                batch = move_batch(load_sample(args.dataset_root, episode, start, args.chunk_size, args.image_size, cameras), args.device)
+                all_gt.append(batch["action"][0].cpu().numpy()); all_pred.append(predict(policy, batch)[0].cpu().numpy())
         ground_truth = np.concatenate(all_gt); prediction = np.concatenate(all_pred); error = prediction - ground_truth
         groups = {"left_arm": slice(0, 7), "right_arm": slice(7, 14), "waist_head": slice(14, 18), "grippers": slice(18, 20), "all": slice(0, 20)}
         metrics = {name: {"mae": float(np.abs(error[:, section]).mean()), "rmse": float(np.sqrt(np.square(error[:, section]).mean()))} for name, section in groups.items()}
