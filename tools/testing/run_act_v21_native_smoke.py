@@ -69,6 +69,34 @@ def load_sample(root: Path, episode: dict, start: int, chunk: int, image_size: i
     return batch
 
 
+def predict(policy: ACTPolicy, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    """Use the v2.1 ACT inference path, excluding GT-only training keys."""
+    inputs = {key: value for key, value in batch.items() if key not in {"action", "action_is_pad"}}
+    return policy.predict_action_chunk(inputs)
+
+
+def save_gt_plot(path: Path, ground_truth: np.ndarray, prediction: np.ndarray) -> None:
+    from PIL import Image, ImageDraw, ImageFont
+    image = Image.new("RGB", (1500, 1050), "white"); draw = ImageDraw.Draw(image)
+    try: title_font = ImageFont.truetype("C:/Windows/Fonts/arialbd.ttf", 23); label_font = ImageFont.truetype("C:/Windows/Fonts/arial.ttf", 16)
+    except OSError: title_font = label_font = ImageFont.load_default()
+    groups = [("left arm (0-6)", 0, 7), ("right arm (7-13)", 7, 14), ("waist/head/grippers (14-19)", 14, 20)]
+    colors = ["#2878b5", "#398c4f", "#7d5ba6", "#d0702b", "#8d4f65", "#1896a5", "#99953b"]
+    draw.text((35, 15), "LeRobot v2.1 ACT: predicted action chunk vs held-out ground truth", fill="#111111", font=title_font)
+    for panel, (name, start, end) in enumerate(groups):
+        left, top, right, bottom = 80, 85 + panel * 310, 1450, 340 + panel * 310
+        values = np.concatenate((ground_truth[:, start:end].ravel(), prediction[:, start:end].ravel()))
+        lo, hi = float(values.min()), float(values.max()); margin = max((hi - lo) * .08, 1e-9); lo -= margin; hi += margin
+        for tick in range(5): draw.line((left, top + tick * (bottom-top)/4, right, top + tick*(bottom-top)/4), fill="#e4e4e4")
+        for channel in range(start, end):
+            color = colors[(channel-start) % len(colors)]
+            for data, width in ((ground_truth[:, channel], 3), (prediction[:, channel], 1)):
+                points = [(left + i * (right-left)/max(1, len(data)-1), bottom - (float(v)-lo)*(bottom-top)/(hi-lo)) for i,v in enumerate(data)]
+                draw.line(points, fill=color, width=width)
+        draw.rectangle((left, top, right, bottom), outline="#555555", width=2); draw.text((left, top-25), name + " (thick=GT, thin=prediction)", fill="#222222", font=label_font)
+    path.parent.mkdir(parents=True, exist_ok=True); image.save(path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Native LeRobot v2.1 ACT smoke training with one resized head camera.")
     parser.add_argument("--dataset-root", type=Path, required=True, help="Single LeRobot v2.1 task root.")
@@ -79,6 +107,8 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--three-cameras", action="store_true", help="Use head, left wrist, and right wrist simultaneously after resize.")
     parser.add_argument("--fixed-sample", action="store_true", help="Repeat one real action chunk; recommended for a deterministic loss-decrease smoke test.")
+    parser.add_argument("--gt-analysis-dir", type=Path, help="Optional held-out GT evaluation directory; reserves the final 20%% episodes for evaluation.")
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
     if args.steps < 10:
         raise SystemExit("--steps must be at least 10")
@@ -116,9 +146,13 @@ def main() -> None:
     optimizer = torch.optim.AdamW(policy.get_optim_params(), lr=args.lr)
     losses: list[float] = []
     usable = [episode for episode in episodes if int(episode["length"]) >= args.chunk_size]
+    split = max(1, int(len(usable) * .8))
+    train_episodes = usable[:split] if args.gt_analysis_dir else usable
+    eval_episodes = usable[split:] if args.gt_analysis_dir else []
+    rng = np.random.default_rng(args.seed)
     for step in range(args.steps):
-        episode = usable[0] if args.fixed_sample else usable[step % len(usable)]
-        start = 0 if args.fixed_sample else (step * 7) % (int(episode["length"]) - args.chunk_size + 1)
+        episode = train_episodes[0] if args.fixed_sample else train_episodes[int(rng.integers(len(train_episodes)))]
+        start = 0 if args.fixed_sample else int(rng.integers(int(episode["length"]) - args.chunk_size + 1))
         batch = load_sample(args.dataset_root, episode, start, args.chunk_size, args.image_size, cameras)
         loss, _ = policy(batch)
         optimizer.zero_grad(); loss.backward(); optimizer.step()
@@ -127,6 +161,18 @@ def main() -> None:
     width = max(3, len(losses) // 4)
     first, last = float(np.mean(losses[:width])), float(np.mean(losses[-width:]))
     report = {"runtime": "LeRobot v2.1 native ACTPolicy", "state_dim": 20, "action_dim": 20, "cameras": list(cameras), "image_size": args.image_size, "steps": args.steps, "fixed_sample": args.fixed_sample, "losses": losses, "first_window_mean": first, "last_window_mean": last, "loss_decreased": last < first}
+    if args.gt_analysis_dir:
+        policy.eval(); all_gt=[]; all_pred=[]
+        with torch.no_grad():
+            for episode in eval_episodes:
+                start = max(0, (int(episode["length"]) - args.chunk_size) // 2)
+                batch = load_sample(args.dataset_root, episode, start, args.chunk_size, args.image_size, cameras)
+                all_gt.append(batch["action"][0].numpy()); all_pred.append(predict(policy, batch)[0].numpy())
+        ground_truth = np.concatenate(all_gt); prediction = np.concatenate(all_pred); error = prediction - ground_truth
+        groups = {"left_arm": slice(0, 7), "right_arm": slice(7, 14), "waist_head": slice(14, 18), "grippers": slice(18, 20), "all": slice(0, 20)}
+        metrics = {name: {"mae": float(np.abs(error[:, section]).mean()), "rmse": float(np.sqrt(np.square(error[:, section]).mean()))} for name, section in groups.items()}
+        plot_path = args.gt_analysis_dir / "prediction_vs_gt.png"; save_gt_plot(plot_path, ground_truth[:args.chunk_size], prediction[:args.chunk_size])
+        report["gt_analysis"] = {"train_episodes": len(train_episodes), "held_out_episodes": len(eval_episodes), "held_out_action_frames": int(len(ground_truth)), "metrics": metrics, "plot": str(plot_path)}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2), encoding="utf8")
     print(json.dumps(report, indent=2), flush=True)
