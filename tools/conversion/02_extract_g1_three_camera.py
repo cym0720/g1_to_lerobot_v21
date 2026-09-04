@@ -5,6 +5,8 @@ import argparse
 import json
 import shutil
 import sys
+import time
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -48,6 +50,49 @@ def append_robot_velocity(source: Path, destination: Path) -> None:
     merged = np.concatenate((action, velocity), axis=1)
     column = pa.array(merged.tolist(), type=pa.list_(pa.float32(), merged.shape[1]))
     data = data.set_column(data.schema.get_field_index("action"), "action", column)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(data, destination, compression="snappy")
+
+
+def rebuild_g1_canonical_20(source: Path, destination: Path) -> None:
+    """Build G1's canonical 20-D vectors from named arm, gripper, head and waist fields."""
+    data = pq.read_table(source)
+    required = (
+        "observation.state.joint_position",
+        "observation.state.left_effector_position",
+        "observation.state.right_effector_position",
+        "observation.state.head_position",
+        "observation.state.waist_position",
+        "action.joint_position",
+        "action.left_effector_position",
+        "action.right_effector_position",
+    )
+    missing = [key for key in required if key not in data.column_names]
+    if missing:
+        raise ValueError(f"{source}: missing canonical G1 fields: {missing}")
+    def vector(key: str) -> np.ndarray:
+        return np.asarray(data[key].to_pylist(), dtype=np.float32).reshape(len(data), -1)
+    state = np.concatenate((
+        vector("observation.state.joint_position"),
+        vector("observation.state.left_effector_position"),
+        vector("observation.state.right_effector_position"),
+        vector("observation.state.head_position"),
+        vector("observation.state.waist_position"),
+    ), axis=1)
+    # The recorder's action head/waist streams are often absent.  The prior
+    # G1 convention uses observed head position and zero waist targets here.
+    action = np.concatenate((
+        vector("action.joint_position"),
+        vector("action.left_effector_position"),
+        vector("action.right_effector_position"),
+        vector("observation.state.head_position"),
+        np.zeros((len(data), 2), dtype=np.float32),
+    ), axis=1)
+    if state.shape[1] != 20 or action.shape[1] != 20:
+        raise ValueError(f"{source}: expected canonical 20-D vectors, got {state.shape}/{action.shape}")
+    for key, values in (("observation.state", state), ("action", action)):
+        column = pa.array(values.tolist(), type=pa.list_(pa.float32(), 20))
+        data = data.set_column(data.schema.get_field_index(key), key, column)
     destination.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(data, destination, compression="snappy")
 
@@ -101,6 +146,36 @@ def append_robot_velocity_to_state(source: Path, destination: Path) -> None:
     pq.write_table(data, destination, compression="snappy")
 
 
+def extract_episode(job: tuple[Path, Path, int, bool, bool, bool, bool]) -> int:
+    source_root, destination_root, index, canonical_g1_20, append_velocity, normalize_gripper, append_velocity_state = job
+    source_parquet = source_root / "data/chunk-000" / f"episode_{index:06d}.parquet"
+    destination_parquet = destination_root / source_parquet.relative_to(source_root)
+    if canonical_g1_20 or append_velocity or normalize_gripper or append_velocity_state:
+        if canonical_g1_20:
+            rebuild_g1_canonical_20(source_parquet, destination_parquet)
+            working_parquet = destination_parquet
+        else:
+            working_parquet = source_parquet
+        if append_velocity:
+            append_robot_velocity(working_parquet, destination_parquet)
+            working_parquet = destination_parquet
+        else:
+            working_parquet = source_parquet
+        if normalize_gripper:
+            normalize_gripper_state(working_parquet, destination_parquet)
+            working_parquet = destination_parquet
+        if append_velocity_state:
+            append_robot_velocity_to_state(working_parquet, destination_parquet)
+    else:
+        copy_file(source_parquet, destination_parquet)
+    for camera in CAMERAS:
+        source_video = source_root / "videos/chunk-000" / camera / f"episode_{index:06d}.mp4"
+        if not source_video.is_file():
+            raise FileNotFoundError(source_video)
+        copy_file(source_video, destination_root / source_video.relative_to(source_root))
+    return index
+
+
 def vector_stats(values: np.ndarray) -> dict:
     values = np.asarray(values, dtype=np.float64)
     if values.ndim == 1:
@@ -135,6 +210,7 @@ def combined_vector_stats(parts: list[dict]) -> dict:
 
 
 def main() -> None:
+    started=time.perf_counter()
     parser = argparse.ArgumentParser(description="Create an independent head + left/right wrist LeRobot v2.1 subset.")
     parser.add_argument("--input", type=Path, required=True, help="Source LeRobot v2.1 dataset root.")
     parser.add_argument("--output", type=Path, required=True, help="New output root; must not exist.")
@@ -142,6 +218,8 @@ def main() -> None:
     parser.add_argument("--append-robot-velocity", action="store_true", help="Append action.robot_velocity [vx, wz] to canonical action.")
     parser.add_argument("--normalize-gripper-state", action="store_true", help="Map gripper state from 0..120 mm to 0..1.")
     parser.add_argument("--append-robot-velocity-to-state", action="store_true", help="Append recorded [vx, wz] to canonical state.")
+    parser.add_argument("--canonical-g1-20", action="store_true", help="Rebuild canonical state/action as G1's arm/gripper/head/waist 20-D vectors.")
+    parser.add_argument("--workers", type=int, default=4, help="Process workers for independent episodes.")
     args = parser.parse_args()
     if args.output.exists():
         raise SystemExit(f"refusing to overwrite existing output: {args.output}")
@@ -154,29 +232,18 @@ def main() -> None:
     for source_root in roots:
         destination_root = args.output / source_root.name
         info = json.loads((source_root / "meta/info.json").read_text(encoding="utf8"))
+        episode_rows = episodes(source_root)
+        if not episode_rows:
+            print(f"{source_root.name}: skipped empty task", flush=True)
+            continue
         missing = [key for key in CAMERAS if key not in info["features"]]
         if missing:
             raise ValueError(f"{source_root.name}: missing requested camera fields: {missing}")
-        episode_rows = episodes(source_root)
         if args.max_episodes_per_task is not None:
             episode_rows = episode_rows[: args.max_episodes_per_task]
-        for episode in episode_rows:
-            index = int(episode["episode_index"])
-            source_parquet = source_root / "data/chunk-000" / f"episode_{index:06d}.parquet"
-            destination_parquet = destination_root / source_parquet.relative_to(source_root)
-            if args.append_robot_velocity or args.normalize_gripper_state or args.append_robot_velocity_to_state:
-                if args.append_robot_velocity:
-                    append_robot_velocity(source_parquet, destination_parquet)
-                    working_parquet = destination_parquet
-                else:
-                    working_parquet = source_parquet
-                if args.normalize_gripper_state:
-                    normalize_gripper_state(working_parquet, destination_parquet)
-                    working_parquet = destination_parquet
-                if args.append_robot_velocity_to_state:
-                    append_robot_velocity_to_state(working_parquet, destination_parquet)
-            else:
-                copy_file(source_parquet, destination_parquet)
+        jobs = [(source_root, destination_root, int(episode["episode_index"]), args.canonical_g1_20, args.append_robot_velocity, args.normalize_gripper_state, args.append_robot_velocity_to_state) for episode in episode_rows]
+        with ProcessPoolExecutor(max_workers=max(1, args.workers)) as pool:
+            list(pool.map(extract_episode, jobs))
         for path in (source_root / "meta").iterdir():
             copy_file(path, destination_root / "meta" / path.name)
         (destination_root / "meta/episodes.jsonl").write_text(
@@ -184,15 +251,11 @@ def main() -> None:
             encoding="utf8",
         )
         videos = 0
-        for episode in episode_rows:
-            index = int(episode["episode_index"])
-            for camera in CAMERAS:
-                source_video = source_root / "videos/chunk-000" / camera / f"episode_{index:06d}.mp4"
-                if not source_video.is_file():
-                    raise FileNotFoundError(source_video)
-                copy_file(source_video, destination_root / source_video.relative_to(source_root))
-                videos += 1
+        videos = len(episode_rows) * len(CAMERAS)
         info["features"] = {key: value for key, value in info["features"].items() if value.get("dtype") != "video" or key in CAMERAS}
+        if args.canonical_g1_20:
+            info["features"]["observation.state"]["shape"] = [20]
+            info["features"]["action"]["shape"] = [20]
         if args.append_robot_velocity:
             action_feature = info["features"]["action"]
             previous_shape = action_feature["shape"]
@@ -219,11 +282,13 @@ def main() -> None:
         rows = [row for row in rows if int(row["episode_index"]) in {int(episode["episode_index"]) for episode in episode_rows}]
         for row in rows:
             row["stats"] = {key: value for key, value in row["stats"].items() if key in info["features"]}
-        if args.append_robot_velocity or args.normalize_gripper_state or args.append_robot_velocity_to_state:
+        if args.canonical_g1_20 or args.append_robot_velocity or args.normalize_gripper_state or args.append_robot_velocity_to_state:
             for row in rows:
                 index = int(row["episode_index"])
                 parquet = destination_root / "data/chunk-000" / f"episode_{index:06d}.parquet"
                 fields = []
+                if args.canonical_g1_20:
+                    fields.extend(("observation.state", "action"))
                 if args.append_robot_velocity:
                     fields.append("action")
                 if args.normalize_gripper_state:
@@ -235,6 +300,8 @@ def main() -> None:
                 for key in fields:
                     row["stats"][key] = vector_stats(np.asarray(data[key].to_pylist(), dtype=np.float32))
             changed = []
+            if args.canonical_g1_20:
+                changed.extend(("observation.state", "action"))
             if args.append_robot_velocity:
                 changed.append("action")
             if args.normalize_gripper_state:
@@ -250,6 +317,7 @@ def main() -> None:
         print(f"{source_root.name}: episodes={len(episode_rows)} videos={videos}", flush=True)
     (args.output / "three_camera_extraction_report.json").write_text(json.dumps({"source": str(args.input), "cameras": list(CAMERAS), "tasks": report}, ensure_ascii=False, indent=2), encoding="utf8")
     print(f"output={args.output}", flush=True)
+    print(f"elapsed_seconds={time.perf_counter()-started:.3f}", flush=True)
 
 
 if __name__ == "__main__":

@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import argparse
 import json
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 import sys
+import time
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -76,7 +77,12 @@ def episode_stats(root: Path, episode: dict, numeric: list[str], cameras: list[s
     return index,stats
 
 
+def episode_stats_job(job: tuple[Path, dict, list[str], list[str], bool]) -> tuple[int, dict]:
+    return episode_stats(*job)
+
+
 def main() -> None:
+    started=time.perf_counter()
     parser=argparse.ArgumentParser(description='Recompute LeRobot v2.1 metadata statistics in place.')
     parser.add_argument('--input',type=Path,required=True,help='03/04 后的 LeRobot v2.1 任务根目录')
     parser.add_argument('--workers',type=int,default=3)
@@ -93,14 +99,16 @@ def main() -> None:
         features=info['features']; cameras=[key for key,value in features.items() if value['dtype']=='video']
         numeric=[key for key,value in features.items() if value['dtype']!='video']
         episodes=jsonl(root/'meta/episodes.jsonl')
-        with ThreadPoolExecutor(max_workers=max(1,args.workers)) as pool:
-            computed=list(pool.map(lambda episode: episode_stats(root,episode,numeric,cameras,args.compute_rgb_stats),episodes))
+        jobs=[(root, episode, numeric, cameras, args.compute_rgb_stats) for episode in episodes]
+        with ProcessPoolExecutor(max_workers=max(1,args.workers)) as pool:
+            computed=list(pool.map(episode_stats_job,jobs))
         computed.sort(key=lambda x:x[0])
         per_episode=[{'episode_index':index,'stats':stats} for index,stats in computed]
         (root/'meta/episodes_stats.jsonl').write_text(''.join(json.dumps(row,ensure_ascii=False)+'\n' for row in per_episode),encoding='utf8')
         aggregate={key:combine([stats[key] for _,stats in computed]) for key in [*numeric,*cameras]}
         (root/'meta/stats.json').write_text(json.dumps(aggregate,ensure_ascii=False,indent=2),encoding='utf8')
         print(f'{root.name}: episodes={len(computed)} features={len(aggregate)}')
+    print(f'elapsed_seconds={time.perf_counter()-started:.3f}', flush=True)
 
 
 if __name__=='__main__': main()

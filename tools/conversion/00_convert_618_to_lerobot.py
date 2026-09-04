@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import av
@@ -30,7 +31,7 @@ def read_json(path: Path) -> dict: return json.loads(path.read_text(encoding="ut
 def timestamps(path: Path) -> np.ndarray:
     return np.asarray([int(line.split()[0]) for line in path.read_text().splitlines() if line.strip()], dtype=np.int64)
 
-def source_errors(ep: Path, min_duration_s: float) -> tuple[dict | None, list[str]]:
+def source_errors(ep: Path, min_duration_s: float, require_fisheyes: bool = True) -> tuple[dict | None, list[str]]:
     """Minimal conversion preflight; authoritative dataset validation happens after conversion."""
     meta_path=ep/'meta_info.json'; errors=[]
     if not meta_path.is_file(): return None,['missing_meta_info.json']
@@ -40,28 +41,56 @@ def source_errors(ep: Path, min_duration_s: float) -> tuple[dict | None, list[st
         if not (ep/relative).is_file(): errors.append(f'missing_{relative}')
     for wrist in ('hand_left','hand_right'):
         if not list((ep/'camera'/wrist/'color').glob('*.jpg')): errors.append(f'missing_{wrist}_jpg')
-    for fisheye in ('head_center_fisheye','head_left_fisheye','head_right_fisheye'):
-        for suffix in ('.h265','.txt'):
-            if not (ep/'camera'/fisheye/f'{fisheye}{suffix}').is_file(): errors.append(f'missing_{fisheye}{suffix}')
+    fisheyes=('head_center_fisheye','head_left_fisheye','head_right_fisheye')
+    if require_fisheyes:
+        for fisheye in fisheyes:
+            for suffix in ('.h265','.txt'):
+                if not (ep/'camera'/fisheye/f'{fisheye}{suffix}').is_file(): errors.append(f'missing_{fisheye}{suffix}')
+    h5_path=ep/'record/raw_joints.h5'
+    if h5_path.is_file():
+        try:
+            with h5py.File(h5_path, 'r'):
+                pass
+        except (OSError, ValueError) as exc:
+            errors.append(f'invalid_raw_joints.h5:{exc}')
     stamp=ep/'camera/head_color/head_color.txt'
     if stamp.is_file():
         try:
             values=timestamps(stamp); duration=(values[-1]-values[0])/1e9 if len(values)>=2 else 0.0
             if duration<min_duration_s: errors.append(f'too_short_head_duration_s:{duration:.3f}<{min_duration_s:g}')
         except (ValueError,OSError) as exc: errors.append(f'invalid_head_timestamps:{exc}')
+    if require_fisheyes:
+        for fisheye in fisheyes:
+            stamp=ep/'camera'/fisheye/f'{fisheye}.txt'
+            if stamp.is_file():
+                try:
+                    if len(timestamps(stamp)) == 0: errors.append(f'empty_{fisheye}_timestamps')
+                except (ValueError,OSError) as exc: errors.append(f'invalid_{fisheye}_timestamps:{exc}')
     return meta,errors
 
-def collect_raw_episodes(source: Path, mapping: dict, min_duration_s: float) -> tuple[dict[str,list[Path]],list[list[str]]]:
+def collect_raw_episodes(source: Path, mapping: dict, min_duration_s: float, require_fisheyes: bool = True) -> tuple[dict[str,list[Path]],list[list[str]]]:
     """Return valid raw episodes grouped by mapped task, plus the rejection audit."""
     grouped={spec['directory']:[] for spec in mapping.values()}; rejected=[]
     for ep in sorted(x for x in source.iterdir() if x.is_dir()):
-        meta,errors=source_errors(ep,min_duration_s); task_id='' if meta is None else str(meta.get('task_id',''))
+        meta,errors=source_errors(ep,min_duration_s,require_fisheyes); task_id='' if meta is None else str(meta.get('task_id',''))
         spec=mapping.get(task_id)
         if spec is None and not errors: errors.append(f'unmapped_task_id:{task_id}')
         if errors:
             rejected.append([ep.name,task_id,';'.join(errors)]); continue
         grouped[spec['directory']].append(ep)
     return grouped,rejected
+
+def add_empty_text_task_mappings(source: Path, mapping: dict) -> None:
+    for episode in source.iterdir():
+        meta_path = episode / 'meta_info.json'
+        if not episode.is_dir() or not meta_path.is_file():
+            continue
+        try:
+            task_id = str(read_json(meta_path).get('task_id', ''))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if task_id and task_id not in mapping:
+            mapping[task_id] = {'order': 1000 + int(task_id) if task_id.isdigit() else 9999, 'name': '', 'directory': f'empty_text_task_{task_id}'}
 
 def nearest(values: np.ndarray, target: np.ndarray) -> np.ndarray:
     right=np.searchsorted(values,target,side="left"); left=np.clip(right-1,0,len(values)-1); right=np.clip(right,0,len(values)-1)
@@ -203,11 +232,18 @@ def prepare_episode(args: tuple[Path,int,int,Path,dict,dict,object]) -> dict:
     return {'episode_index':index,'tasks':[task['name']],'length':len(target),'dataset_from_index':offset,'dataset_to_index':offset+len(target),'original_episode_id':ep.name,'source_task_id':meta['task_id'],'features':features,'stats':episode_stats,'validation_errors':errors}
 
 def main() -> None:
-    p=argparse.ArgumentParser();p.add_argument('--input',type=Path,required=True,help='原始 dataset/618data；也兼容辅助预检产生的分组输出');p.add_argument('--output',type=Path,required=True);p.add_argument('--schema',type=Path,default=REPO_ROOT/'config/618_lerobot_schema.json');p.add_argument('--task-map',type=Path,default=REPO_ROOT/'config/task_id_map.json');p.add_argument('--fields',type=Path,default=REPO_ROOT/'config/618_field_definitions.json');p.add_argument('--workers',type=int,default=8);p.add_argument('--cuda-workers',type=int,default=4);p.add_argument('--qsv-workers',type=int,default=0);p.add_argument('--min-duration-s',type=float,default=8.0);a=p.parse_args()
+    started=time.perf_counter()
+    p=argparse.ArgumentParser();p.add_argument('--input',type=Path,required=True,help='原始 dataset/618data；也兼容辅助预检产生的分组输出');p.add_argument('--output',type=Path,required=True);p.add_argument('--schema',type=Path,default=REPO_ROOT/'config/618_lerobot_schema.json');p.add_argument('--task-map',type=Path,default=REPO_ROOT/'config/task_id_map.json');p.add_argument('--fields',type=Path,default=REPO_ROOT/'config/618_field_definitions.json');p.add_argument('--workers',type=int,default=8);p.add_argument('--cuda-workers',type=int,default=4);p.add_argument('--qsv-workers',type=int,default=0);p.add_argument('--min-duration-s',type=float,default=8.0);p.add_argument('--allow-unmapped-empty-task',action='store_true');p.add_argument('--three-cameras-only',action='store_true');a=p.parse_args()
     if a.output.exists(): raise SystemExit(f'输出已存在: {a.output}')
-    schema=read_json(a.schema); field_definitions=read_json(a.fields); schema.update(field_definitions); mapping=read_json(a.task_map)['tasks']; a.output.mkdir(parents=True)
+    schema=read_json(a.schema); field_definitions=read_json(a.fields); schema.update(field_definitions); mapping=read_json(a.task_map)['tasks'];
+    if a.three_cameras_only:
+        keep={'observation.images.cam_high_rgb','observation.images.cam_left_wrist_rgb','observation.images.cam_right_wrist_rgb'}
+        schema['cameras']={key:value for key,value in schema['cameras'].items() if key in keep}
+        if len(schema['cameras']) != 3: raise ValueError('schema is missing one of the requested three RGB cameras')
+    a.output.mkdir(parents=True)
     raw_layout=any((child/'meta_info.json').is_file() for child in a.input.iterdir() if child.is_dir())
-    raw_groups,rejected=collect_raw_episodes(a.input,mapping,a.min_duration_s) if raw_layout else ({},[])
+    if raw_layout and a.allow_unmapped_empty_task: add_empty_text_task_mappings(a.input,mapping)
+    raw_groups,rejected=collect_raw_episodes(a.input,mapping,a.min_duration_s,require_fisheyes=not a.three_cameras_only) if raw_layout else ({},[])
     if raw_layout:
         with (a.output/'conversion_rejected.csv').open('w',newline='',encoding='utf8') as file:
             csv.writer(file).writerows([['episode_uuid','task_id','rejection'],*rejected])
@@ -267,4 +303,5 @@ def main() -> None:
         with (root/'conversion_validation.csv').open('w',newline='',encoding='utf8') as file:
             csv.writer(file).writerows([['episode_index','original_episode_id','frames','validation'],*[[x['episode_index'],x['original_episode_id'],x['length'],';'.join(x['validation_errors']) or 'ok'] for x in result]])
         print(spec['directory'],len(result),'episodes')
+    print(f'elapsed_seconds={time.perf_counter()-started:.3f}', flush=True)
 if __name__=='__main__': main()
