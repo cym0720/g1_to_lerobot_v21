@@ -146,8 +146,26 @@ def append_robot_velocity_to_state(source: Path, destination: Path) -> None:
     pq.write_table(data, destination, compression="snappy")
 
 
-def extract_episode(job: tuple[Path, Path, int, bool, bool, bool, bool]) -> int:
-    source_root, destination_root, index, canonical_g1_20, append_velocity, normalize_gripper, append_velocity_state = job
+def remove_robot_velocity_from_state(source: Path, destination: Path) -> None:
+    """Remove the final [vx, wz] values from canonical state, retaining action unchanged."""
+    data = pq.read_table(source)
+    if "observation.state" not in data.column_names:
+        raise ValueError(f"{source}: missing observation.state")
+    state = np.asarray(data["observation.state"].to_pylist(), dtype=np.float32)
+    if state.ndim != 2 or state.shape[1] < 3:
+        raise ValueError(f"{source}: invalid observation.state shape {state.shape}")
+    state = state[:, :-2]
+    state_column = pa.array(state.tolist(), type=pa.list_(pa.float32(), state.shape[1]))
+    data = data.set_column(data.schema.get_field_index("observation.state"), "observation.state", state_column)
+    velocity_index = data.schema.get_field_index("observation.state.robot_velocity")
+    if velocity_index >= 0:
+        data = data.remove_column(velocity_index)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(data, destination, compression="snappy")
+
+
+def extract_episode(job: tuple[Path, Path, int, bool, bool, bool, bool, bool]) -> int:
+    source_root, destination_root, index, canonical_g1_20, append_velocity, normalize_gripper, append_velocity_state, remove_velocity_state = job
     source_parquet = source_root / "data/chunk-000" / f"episode_{index:06d}.parquet"
     destination_parquet = destination_root / source_parquet.relative_to(source_root)
     if canonical_g1_20 or append_velocity or normalize_gripper or append_velocity_state:
@@ -167,6 +185,10 @@ def extract_episode(job: tuple[Path, Path, int, bool, bool, bool, bool]) -> int:
         if append_velocity_state:
             append_robot_velocity_to_state(working_parquet, destination_parquet)
     else:
+        working_parquet = source_parquet
+    if remove_velocity_state:
+        remove_robot_velocity_from_state(working_parquet, destination_parquet)
+    elif not (canonical_g1_20 or append_velocity or normalize_gripper or append_velocity_state):
         copy_file(source_parquet, destination_parquet)
     for camera in CAMERAS:
         source_video = source_root / "videos/chunk-000" / camera / f"episode_{index:06d}.mp4"
@@ -219,6 +241,7 @@ def main() -> None:
     parser.add_argument("--normalize-gripper-state", action="store_true", help="Map gripper state from 0..120 mm to 0..1.")
     parser.add_argument("--append-robot-velocity-to-state", action="store_true", help="Append recorded [vx, wz] to canonical state.")
     parser.add_argument("--canonical-g1-20", action="store_true", help="Rebuild canonical state/action as G1's arm/gripper/head/waist 20-D vectors.")
+    parser.add_argument("--remove-robot-velocity-from-state", action="store_true", help="Remove final [vx, wz] from canonical state; leave action unchanged.")
     parser.add_argument("--workers", type=int, default=4, help="Process workers for independent episodes.")
     args = parser.parse_args()
     if args.output.exists():
@@ -241,7 +264,7 @@ def main() -> None:
             raise ValueError(f"{source_root.name}: missing requested camera fields: {missing}")
         if args.max_episodes_per_task is not None:
             episode_rows = episode_rows[: args.max_episodes_per_task]
-        jobs = [(source_root, destination_root, int(episode["episode_index"]), args.canonical_g1_20, args.append_robot_velocity, args.normalize_gripper_state, args.append_robot_velocity_to_state) for episode in episode_rows]
+        jobs = [(source_root, destination_root, int(episode["episode_index"]), args.canonical_g1_20, args.append_robot_velocity, args.normalize_gripper_state, args.append_robot_velocity_to_state, args.remove_robot_velocity_from_state) for episode in episode_rows]
         with ProcessPoolExecutor(max_workers=max(1, args.workers)) as pool:
             list(pool.map(extract_episode, jobs))
         for path in (source_root / "meta").iterdir():
@@ -256,6 +279,10 @@ def main() -> None:
         if args.canonical_g1_20:
             info["features"]["observation.state"]["shape"] = [20]
             info["features"]["action"]["shape"] = [20]
+        if args.remove_robot_velocity_from_state:
+            state_feature = info["features"]["observation.state"]
+            state_feature["shape"] = [int(state_feature["shape"][0]) - 2]
+            info["features"].pop("observation.state.robot_velocity", None)
         if args.append_robot_velocity:
             action_feature = info["features"]["action"]
             previous_shape = action_feature["shape"]
@@ -282,13 +309,15 @@ def main() -> None:
         rows = [row for row in rows if int(row["episode_index"]) in {int(episode["episode_index"]) for episode in episode_rows}]
         for row in rows:
             row["stats"] = {key: value for key, value in row["stats"].items() if key in info["features"]}
-        if args.canonical_g1_20 or args.append_robot_velocity or args.normalize_gripper_state or args.append_robot_velocity_to_state:
+        if args.canonical_g1_20 or args.append_robot_velocity or args.normalize_gripper_state or args.append_robot_velocity_to_state or args.remove_robot_velocity_from_state:
             for row in rows:
                 index = int(row["episode_index"])
                 parquet = destination_root / "data/chunk-000" / f"episode_{index:06d}.parquet"
                 fields = []
                 if args.canonical_g1_20:
                     fields.extend(("observation.state", "action"))
+                if args.remove_robot_velocity_from_state:
+                    fields.append("observation.state")
                 if args.append_robot_velocity:
                     fields.append("action")
                 if args.normalize_gripper_state:
@@ -302,6 +331,8 @@ def main() -> None:
             changed = []
             if args.canonical_g1_20:
                 changed.extend(("observation.state", "action"))
+            if args.remove_robot_velocity_from_state:
+                changed.append("observation.state")
             if args.append_robot_velocity:
                 changed.append("action")
             if args.normalize_gripper_state:
