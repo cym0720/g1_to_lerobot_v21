@@ -19,7 +19,16 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True, help="训练产物目录，必须不存在")
     parser.add_argument("--steps", type=int, default=30, help="真实 optimizer 更新步数，至少 10")
     parser.add_argument("--python", type=Path, default=Path(sys.executable), help="安装 LeRobot 0.3.x 的 Python")
+    parser.add_argument("--device", default="auto", choices=("auto", "cuda", "cpu"), help="ACT smoke device")
     args = parser.parse_args()
+    if args.device == "auto":
+        try:
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        except ImportError:
+            device = "cpu"
+    else:
+        device = args.device
     if args.steps < 10:
         raise SystemExit("--steps 必须至少为 10，才可以判断 loss 趋势")
     if not (args.dataset_root / "meta" / "info.json").is_file():
@@ -28,11 +37,12 @@ def main() -> None:
         raise SystemExit(f"训练输出已存在，拒绝覆盖: {args.output}")
 
     command = [
-        str(args.python), "-u", "-m", "lerobot.scripts.train",
+        str(args.python), "-u", "-m", "lerobot.scripts.lerobot_train",
         f"--dataset.repo_id={args.repo_id}",
         f"--dataset.root={args.dataset_root}",
         "--policy.type=act",
-        "--policy.device=cpu",
+        f"--policy.device={device}",
+        "--policy.pretrained_backbone_weights=null",
         "--policy.push_to_hub=false",
         f"--output_dir={args.output}",
         f"--steps={args.steps}",
