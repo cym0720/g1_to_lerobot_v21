@@ -29,7 +29,9 @@ class ContractAndDetectionTests(unittest.TestCase):
         self.assertEqual(contract.robot, "g1")
         self.assertEqual(len(contract.qpos_names), 20)
         self.assertEqual(contract.gripper_indices, (7, 15))
-        self.assertEqual(contract.qpos_names[16:], ("head_yaw", "head_pitch", "lift", "waist_pitch"))
+        self.assertEqual(
+            contract.qpos_names[16:], ("head_yaw", "head_pitch", "lift", "waist_pitch")
+        )
 
     def test_gripper_ranges_are_inclusive_and_filtered(self) -> None:
         qpos = np.zeros((12, 20), dtype=np.float32)
@@ -53,18 +55,33 @@ class ContractAndDetectionTests(unittest.TestCase):
             contract="eva-replay-g1-qpos20-v1",
             source_dataset="fixture",
             stage="gripper-candidates",
-            episodes=[{"task": "task_a", "episode_index": 0, "source_frames": 8, "keep_ranges": [[0, 2], [3, 4]]}],
+            episodes=[
+                {
+                    "task": "task_a",
+                    "episode_index": 0,
+                    "source_frames": 8,
+                    "keep_ranges": [[0, 2], [3, 4]],
+                }
+            ],
         )
         self.assertEqual(plan["episodes"][0]["keep_ranges"], [[0, 4]])
 
     def test_g1_qpos_uses_contract_order_and_closed_grippers(self) -> None:
         frames = 2
         columns = {
-            "observation.state.joint_position": np.arange(frames * 14, dtype=np.float32).reshape(frames, 14),
-            "observation.state.left_effector_position": np.array([[0.0], [120.0]], dtype=np.float32),
-            "observation.state.right_effector_position": np.array([[120.0], [0.0]], dtype=np.float32),
+            "observation.state.joint_position": np.arange(frames * 14, dtype=np.float32).reshape(
+                frames, 14
+            ),
+            "observation.state.left_effector_position": np.array(
+                [[0.0], [120.0]], dtype=np.float32
+            ),
+            "observation.state.right_effector_position": np.array(
+                [[120.0], [0.0]], dtype=np.float32
+            ),
             "observation.state.head_position": np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
-            "observation.state.waist_position": np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32),
+            "observation.state.waist_position": np.array(
+                [[5.0, 6.0], [7.0, 8.0]], dtype=np.float32
+            ),
             "action.joint_position": np.arange(frames * 14, dtype=np.float32).reshape(frames, 14),
             "action.left_effector_position": np.array([[0.0], [120.0]], dtype=np.float32),
             "action.right_effector_position": np.array([[120.0], [0.0]], dtype=np.float32),
@@ -78,7 +95,9 @@ class ContractAndDetectionTests(unittest.TestCase):
         self.assertEqual(assembly.state[0, 16:].tolist(), [1.0, 2.0, 5.0, 6.0])
 
     def test_opening_input_is_inverted_and_action_fallback_is_explicit(self) -> None:
-        self.assertEqual(to_closed_fraction(np.array([[0.25]], dtype=np.float32), "opening_0_1")[0, 0], 0.75)
+        self.assertEqual(
+            to_closed_fraction(np.array([[0.25]], dtype=np.float32), "opening_0_1")[0, 0], 0.75
+        )
         columns = {
             "observation.state.joint_position": np.zeros((1, 14), dtype=np.float32),
             "observation.state.left_effector_position": np.zeros((1, 1), dtype=np.float32),
@@ -112,11 +131,18 @@ class ContractAndDetectionTests(unittest.TestCase):
     def test_ball_events_require_matching_contract_and_unique_episode(self) -> None:
         with TemporaryDirectory() as temporary:
             path = Path(temporary) / "ball_events.json"
-            path.write_text(json.dumps({
-                "schema": "ball-events/v1",
-                "contract": "eva-replay-g1-qpos20-v1",
-                "episodes": [{"task": "task_a", "episode_index": 0, "frame_indices": [8, 2, 8]}],
-            }), encoding="utf8")
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema": "ball-events/v1",
+                        "contract": "eva-replay-g1-qpos20-v1",
+                        "episodes": [
+                            {"task": "task_a", "episode_index": 0, "frame_indices": [8, 2, 8]}
+                        ],
+                    }
+                ),
+                encoding="utf8",
+            )
             self.assertEqual(
                 load_ball_events(path, "eva-replay-g1-qpos20-v1"), {("task_a", 0): [2, 8]}
             )
@@ -143,50 +169,103 @@ class ContractAndDetectionTests(unittest.TestCase):
                 "task_index": {"dtype": "int64", "shape": [1]},
                 "observation.images.cam_high": {"dtype": "video", "shape": [8, 8, 3]},
             }
-            info = {"codebase_version": "v2.1", "fps": 5, "chunks_size": 1000, "features": features,
-                    "total_episodes": 1, "total_frames": 6, "total_videos": 1}
+            info = {
+                "codebase_version": "v2.1",
+                "fps": 5,
+                "chunks_size": 1000,
+                "features": features,
+                "total_episodes": 1,
+                "total_frames": 6,
+                "total_videos": 1,
+            }
             (root / "meta/info.json").write_text(json.dumps(info), encoding="utf8")
-            (root / "meta/tasks.jsonl").write_text('{"task_index": 0, "task": "fixture task"}\n', encoding="utf8")
+            (root / "meta/tasks.jsonl").write_text(
+                '{"task_index": 0, "task": "fixture task"}\n', encoding="utf8"
+            )
             (root / "meta/episodes.jsonl").write_text(
                 '{"episode_index": 0, "tasks": ["fixture task"], "length": 6, "dataset_from_index": 0, "dataset_to_index": 6}\n',
                 encoding="utf8",
             )
             vector_type = pa.list_(pa.float32(), 20)
             vectors = np.arange(120, dtype=np.float32).reshape(6, 20).tolist()
-            table = pa.table({
-                "observations.state.qpos": pa.array(vectors, type=vector_type),
-                "action.qpos": pa.array(vectors, type=vector_type),
-                "timestamp": pa.array(np.arange(6, dtype=np.float32) / 5),
-                "frame_index": pa.array(range(6), type=pa.int64()),
-                "episode_index": pa.array([0] * 6, type=pa.int64()),
-                "index": pa.array(range(6), type=pa.int64()),
-                "task_index": pa.array([0] * 6, type=pa.int64()),
-            })
+            table = pa.table(
+                {
+                    "observations.state.qpos": pa.array(vectors, type=vector_type),
+                    "action.qpos": pa.array(vectors, type=vector_type),
+                    "timestamp": pa.array(np.arange(6, dtype=np.float32) / 5),
+                    "frame_index": pa.array(range(6), type=pa.int64()),
+                    "episode_index": pa.array([0] * 6, type=pa.int64()),
+                    "index": pa.array(range(6), type=pa.int64()),
+                    "task_index": pa.array([0] * 6, type=pa.int64()),
+                }
+            )
             pq.write_table(table, root / "data/chunk-000/episode_000000.parquet")
-            subprocess.run([
-                "ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=8x8:rate=5",
-                "-frames:v", "6", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video),
-            ], check=True)
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "testsrc=size=8x8:rate=5",
+                    "-frames:v",
+                    "6",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    str(video),
+                ],
+                check=True,
+            )
             plan = make_plan(
-                contract="eva-replay-g1-qpos20-v1", source_dataset="fixture", stage="pingpong-final-crop",
-                episodes=[{"task": "task_a", "episode_index": 0, "source_frames": 6, "keep_ranges": [[1, 3], [5, 5]]}],
+                contract="eva-replay-g1-qpos20-v1",
+                source_dataset="fixture",
+                stage="pingpong-final-crop",
+                episodes=[
+                    {
+                        "task": "task_a",
+                        "episode_index": 0,
+                        "source_frames": 6,
+                        "keep_ranges": [[1, 3], [5, 5]],
+                    }
+                ],
             )
 
             preflight = preflight_split(parent, plan)
             self.assertEqual(preflight["tasks"][0]["kept_frames"], 4)
             report = split_dataset(parent, output, plan, workers=1)
             destination = output / "task_a"
-            self.assertEqual(report["tasks"], [{"task_directory": "task_a", "episodes": 2, "frames": 4}])
+            self.assertEqual(
+                report["tasks"], [{"task_directory": "task_a", "episodes": 2, "frames": 4}]
+            )
             validate_split_task(destination)
-            rows = [json.loads(line) for line in (destination / "meta/episodes.jsonl").read_text(encoding="utf8").splitlines()]
+            rows = [
+                json.loads(line)
+                for line in (destination / "meta/episodes.jsonl")
+                .read_text(encoding="utf8")
+                .splitlines()
+            ]
             self.assertEqual([row["length"] for row in rows], [3, 1])
             first = pq.read_table(episode_parquet(destination, 0))
             second = pq.read_table(episode_parquet(destination, 1))
             self.assertEqual(first["observations.state.qpos"].to_pylist()[0], vectors[1])
             self.assertEqual(second["observations.state.qpos"].to_pylist()[0], vectors[5])
             self.assertEqual(first["index"].to_pylist() + second["index"].to_pylist(), [0, 1, 2, 3])
-            self.assertEqual(video_frame_count(destination / "videos/chunk-000/observation.images.cam_high/episode_000000.mp4"), 3)
-            self.assertEqual(video_frame_count(destination / "videos/chunk-000/observation.images.cam_high/episode_000001.mp4"), 1)
+            self.assertEqual(
+                video_frame_count(
+                    destination / "videos/chunk-000/observation.images.cam_high/episode_000000.mp4"
+                ),
+                3,
+            )
+            self.assertEqual(
+                video_frame_count(
+                    destination / "videos/chunk-000/observation.images.cam_high/episode_000001.mp4"
+                ),
+                1,
+            )
 
 
 if __name__ == "__main__":

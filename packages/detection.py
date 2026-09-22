@@ -36,9 +36,7 @@ def gripper_candidate_ranges(
         cursor = max(cursor, jump + guard_frames)
     if cursor < len(values):
         ranges.append([cursor, len(values) - 1])
-    return normalize_ranges(
-        ranges, len(values), min_segment_frames, merge_adjacent=False
-    ), jumps
+    return normalize_ranges(ranges, len(values), min_segment_frames, merge_adjacent=False), jumps
 
 
 def pca_motion_scores(qpos: np.ndarray, feature_indices: Iterable[int]) -> np.ndarray:

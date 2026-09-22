@@ -26,7 +26,13 @@ def main() -> None:
     plan = load_plan(args.plan)
     if args.dry_run:
         report = preflight_split(args.input, plan)
-        print(json.dumps({"input": str(args.input), "output": str(args.output), "preflight": report}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {"input": str(args.input), "output": str(args.output), "preflight": report},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return
     report = split_dataset(args.input, args.output, plan, args.workers)
     if args.debug:

@@ -61,20 +61,24 @@ def main() -> None:
         raise SystemExit(f"input does not exist: {args.input}")
     contract = load_qpos_contract(args.contract)
     config = json.loads(args.detector_config.read_text(encoding="utf8"))
-    if tuple(config["gripper_names"]) != tuple(contract.qpos_names[index] for index in contract.gripper_indices):
+    if tuple(config["gripper_names"]) != tuple(
+        contract.qpos_names[index] for index in contract.gripper_indices
+    ):
         raise SystemExit("detector gripper names do not match the selected contract")
     jobs = []
     for root in task_roots(args.input):
         for episode in episodes(root):
-            jobs.append((
-                root,
-                episode,
-                contract.qpos_key,
-                contract.gripper_indices,
-                float(config["jump_threshold"]),
-                int(config["guard_frames"]),
-                int(config["min_segment_frames"]),
-            ))
+            jobs.append(
+                (
+                    root,
+                    episode,
+                    contract.qpos_key,
+                    contract.gripper_indices,
+                    float(config["jump_threshold"]),
+                    int(config["guard_frames"]),
+                    int(config["min_segment_frames"]),
+                )
+            )
     if not jobs:
         raise SystemExit("input contains no LeRobot v2.1 episodes")
     results = []

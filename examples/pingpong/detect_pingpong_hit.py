@@ -21,9 +21,7 @@ from packages.lerobot_v21 import episode_parquet, task_roots
 from packages.range_plan import load_plan, make_plan, write_plan
 
 
-def _process_episode(
-    job: tuple[Path, dict, str, tuple[int, ...], float, int, list[int]]
-) -> dict:
+def _process_episode(job: tuple[Path, dict, str, tuple[int, ...], float, int, list[int]]) -> dict:
     root, candidate, qpos_key, feature_indices, score_threshold, max_delta, ball_frames = job
     episode_index = int(candidate["episode_index"])
     table = pq.read_table(episode_parquet(root, episode_index), columns=[qpos_key])
@@ -73,8 +71,13 @@ def main() -> None:
     args = parser.parse_args()
     contract = load_qpos_contract(args.contract)
     candidates = load_plan(args.candidate_plan)
-    if candidates["contract"] != contract.contract_id or candidates["stage"] != "gripper-candidates":
-        raise SystemExit("candidate plan must be a gripper-candidates plan for the selected contract")
+    if (
+        candidates["contract"] != contract.contract_id
+        or candidates["stage"] != "gripper-candidates"
+    ):
+        raise SystemExit(
+            "candidate plan must be a gripper-candidates plan for the selected contract"
+        )
     ball_events = load_ball_events(args.ball_events, contract.contract_id)
     config = json.loads(args.detector_config.read_text(encoding="utf8"))
     feature_indices = tuple(contract.index(name) for name in config["pca_feature_names"])
@@ -84,11 +87,17 @@ def main() -> None:
         task = candidate["task"]
         if task not in roots:
             raise SystemExit(f"candidate task {task!r} is absent from --input")
-        jobs.append((
-            roots[task], candidate, contract.qpos_key, feature_indices,
-            float(config["pca_score_z_threshold"]), int(config["ball_pca_max_frame_delta"]),
-            ball_events.get((task, int(candidate["episode_index"])), []),
-        ))
+        jobs.append(
+            (
+                roots[task],
+                candidate,
+                contract.qpos_key,
+                feature_indices,
+                float(config["pca_score_z_threshold"]),
+                int(config["ball_pca_max_frame_delta"]),
+                ball_events.get((task, int(candidate["episode_index"])), []),
+            )
+        )
     results = []
     with ProcessPoolExecutor(max_workers=max(1, min(args.workers, len(jobs) or 1))) as pool:
         futures = [pool.submit(_process_episode, job) for job in jobs]

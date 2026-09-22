@@ -52,7 +52,10 @@ def _first_matrix(
 
 
 def assemble_g1_qpos(
-    columns: dict[str, np.ndarray], *, gripper_convention: GripperConvention, allow_state_action_fallback: bool = False
+    columns: dict[str, np.ndarray],
+    *,
+    gripper_convention: GripperConvention,
+    allow_state_action_fallback: bool = False,
 ) -> QposAssembly:
     """Assemble [left arm, grip, right arm, grip, head, body] named fields.
 
@@ -98,8 +101,12 @@ def assemble_g1_qpos(
             "allow_state_action_fallback after recording the provenance"
         )
 
-    def join(arms: np.ndarray, left: np.ndarray, right: np.ndarray, head: np.ndarray, body: np.ndarray) -> np.ndarray:
-        return np.concatenate((arms[:, :7], left, arms[:, 7:], right, head, body), axis=1).astype(np.float32)
+    def join(
+        arms: np.ndarray, left: np.ndarray, right: np.ndarray, head: np.ndarray, body: np.ndarray
+    ) -> np.ndarray:
+        return np.concatenate((arms[:, :7], left, arms[:, 7:], right, head, body), axis=1).astype(
+            np.float32
+        )
 
     state = join(state_arms, state_left, state_right, state_head, state_body)
     action = join(action_arms, action_left, action_right, action_head, action_body)
