@@ -21,9 +21,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--input", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
-    p.add_argument(
-        "--min-duration-s", type=float, default=8.0, help="按 LeRobot fps 计算的最短轨迹时长（秒）"
-    )
+    p.add_argument("--min-duration-s", type=float, default=8.0, help="按 LeRobot fps 计算的最短轨迹时长（秒）")
     a = p.parse_args()
     a.output.mkdir(parents=True, exist_ok=False)
     report = []

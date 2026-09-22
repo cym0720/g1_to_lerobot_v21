@@ -16,7 +16,9 @@ class ProcessLane:
     payload: Any
 
 
-def video_process_lanes(total_workers: int, cuda_workers: int, qsv_workers: int) -> list[ProcessLane]:
+def video_process_lanes(
+    total_workers: int, cuda_workers: int, qsv_workers: int
+) -> list[ProcessLane]:
     """Build bounded CUDA/QSV/CPU lanes whose worker counts sum to total_workers."""
     if total_workers < 1 or cuda_workers < 0 or qsv_workers < 0:
         raise ValueError("worker counts must be non-negative and total_workers must be positive")
@@ -63,7 +65,9 @@ def run_routed_process_jobs(
 
 
 def run_process_job_groups(
-    groups: Sequence[tuple[Callable[[tuple[Any, ...]], Any], Sequence[tuple[Any, ...]], Sequence[ProcessLane]]],
+    groups: Sequence[
+        tuple[Callable[[tuple[Any, ...]], Any], Sequence[tuple[Any, ...]], Sequence[ProcessLane]]
+    ],
 ) -> list[list[Any]]:
     """Run independent routed process-pool groups concurrently."""
     if not groups:

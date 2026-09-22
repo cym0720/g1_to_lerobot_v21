@@ -21,7 +21,14 @@ def main() -> None:
     results = run_routed_process_jobs(routed_worker, [(value,) for value in range(8)], lanes)
     assert [value for value, _ in results] == [value * value for value in range(8)]
     assert [backend for _, backend in results] == [
-        "cuda", "cuda", "qsv", "cpu", "cuda", "cuda", "qsv", "cpu"
+        "cuda",
+        "cuda",
+        "qsv",
+        "cpu",
+        "cuda",
+        "cuda",
+        "qsv",
+        "cpu",
     ]
     print("process_routing_ok", results)
 
