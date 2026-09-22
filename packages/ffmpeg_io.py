@@ -15,6 +15,26 @@ def video_frame_count(path: Path) -> int:
     result = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames", "-show_entries", "stream=nb_read_frames", "-of", "default=nokey=1:noprint_wrappers=1", str(path)], capture_output=True, text=True, check=True)
     return int(result.stdout.strip())
 
+def clip_video_frames(source: Path, destination: Path, start: int, end: int, fps: float) -> None:
+    """Decode and re-encode an inclusive frame interval with an exact count gate."""
+    if start < 0 or end < start:
+        raise ValueError(f"invalid inclusive video range [{start}, {end}]")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(".partial.mp4")
+    temporary.unlink(missing_ok=True)
+    run_ffmpeg([
+        "-i", str(source),
+        "-vf", f"select=between(n\\,{start}\\,{end}),setpts=N/({fps}*TB)",
+        "-frames:v", str(end - start + 1),
+        "-r", str(fps),
+        "-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p", str(temporary),
+    ])
+    frames = video_frame_count(temporary)
+    if frames != end - start + 1:
+        temporary.unlink(missing_ok=True)
+        raise RuntimeError(f"{source}: clipped {frames} frames, expected {end - start + 1}")
+    temporary.replace(destination)
+
 def ffmpeg_capabilities() -> dict[str, bool]:
     encoders = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True, check=True).stdout
     decoders = subprocess.run(["ffmpeg", "-hide_banner", "-decoders"], capture_output=True, text=True, check=True).stdout
