@@ -54,6 +54,6 @@ EVA qpos20 converted baseline
 ## 剩余迁移 / 淘汰清单
 
 1. 从真实乒乓球球检测代码或人工标注迁移 `ball-events/v1` adapter；不从编译缓存猜阈值。它只负责第二步的球帧事件，不裁剪数据。
-2. 把旧字段依赖脚本（例如 `01_overlay_g1_rollflow20.py`、`run_act_v21_native_smoke.py`、旧离群审查和 benchmark）迁移到 qpos20，或移动到 `tools/legacy/` 并加醒目弃用说明。
+2. 已将旧字段依赖的 overlay、三相机抽取、旧 ACT loader 与 action-filter benchmark 移到 `tools/legacy/`，并记录正式替代关系。新增 legacy 工具不得被主入口引用。
 3. 将转换器里仍然存在的早期兼容参数和重复媒体编码细节进一步下沉到 packages；每次移动后保留 Windows process-pool 测试。
 4. 在用户确认 618 左右夹爪的真实尺度和开闭方向后，执行一份小型真实输出，并通过完整 read/video/ACT gate；在此之前不得批量物化正式数据。
