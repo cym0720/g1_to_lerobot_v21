@@ -1,0 +1,42 @@
+{
+  "contract_id": "eva-replay-g1-qpos20-v1",
+  "robot": "g1",
+  "control_mode": "qpos",
+  "required_features": {
+    "observations.state.qpos": {
+      "dtype": "float32",
+      "shape": [20],
+      "names": [
+        "left_arm_joint1", "left_arm_joint2", "left_arm_joint3", "left_arm_joint4", "left_arm_joint5", "left_arm_joint6", "left_arm_joint7", "left_gripper",
+        "right_arm_joint1", "right_arm_joint2", "right_arm_joint3", "right_arm_joint4", "right_arm_joint5", "right_arm_joint6", "right_arm_joint7", "right_gripper",
+        "head_yaw", "head_pitch", "lift", "waist_pitch"
+      ]
+    },
+    "action.qpos": {
+      "dtype": "float32",
+      "shape": [20],
+      "same_order_as": "observations.state.qpos"
+    },
+    "observation.images.cam_high": {"dtype": "video", "shape": ["H", "W", 3]},
+    "observation.images.cam_left_wrist": {"dtype": "video", "shape": ["H", "W", 3]},
+    "observation.images.cam_right_wrist": {"dtype": "video", "shape": ["H", "W", 3]},
+    "timestamp": {"dtype": "float32", "shape": [1]}
+  },
+  "optional_features": {
+    "observations.state.eef": {"dtype": "float32", "shape": [16], "quaternion_order": "wxyz"},
+    "action.eef": {"dtype": "float32", "shape": [16], "quaternion_order": "wxyz"}
+  },
+  "gripper": {
+    "range": [0.0, 1.0],
+    "semantic": "closed_fraction",
+    "open": 0.0,
+    "closed": 1.0,
+    "legacy_opening_adapter": "closed = 1.0 - opening"
+  },
+  "writer_rules": [
+    "Do not emit legacy packed observation.state or action vectors in new EVA datasets.",
+    "Do not emit eef unless a full frame-aligned 16D source mapping exists.",
+    "Preserve source video resolution on disk; model resize is a runtime concern.",
+    "Never overwrite a converted dataset; write a new target directory."
+  ]
+}

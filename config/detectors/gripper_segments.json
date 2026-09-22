@@ -1,0 +1,9 @@
+{
+  "detector_id": "gripper-segments-v1",
+  "input": "observations.state.qpos",
+  "gripper_names": ["left_gripper", "right_gripper"],
+  "jump_threshold": 0.1,
+  "guard_frames": 0,
+  "min_segment_frames": 64,
+  "range_semantics": "inclusive"
+}

@@ -1,0 +1,13 @@
+{
+  "detector_id": "pingpong-hit-v1",
+  "input": {
+    "ball_events": "ball-events/v1",
+    "joint_signal": "observations.state.qpos"
+  },
+  "pca_feature_names": [
+    "right_arm_joint1", "right_arm_joint2", "right_arm_joint3", "right_arm_joint4", "right_arm_joint5", "right_arm_joint6", "right_arm_joint7"
+  ],
+  "pca_score_z_threshold": 3.0,
+  "ball_pca_max_frame_delta": 10,
+  "range_semantics": "inclusive"
+}
