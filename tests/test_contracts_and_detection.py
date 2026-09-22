@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import json
 
 import numpy as np
 
@@ -11,6 +12,7 @@ from packages.detection import fuse_pingpong_hits, gripper_candidate_ranges, pca
 from packages.eva_qpos import assemble_g1_qpos, to_closed_fraction
 from packages.range_plan import make_plan
 from packages.lerobot_v21 import episode_parquet
+from packages.ball_events import BallEventsError, load_ball_events
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -101,6 +103,20 @@ class ContractAndDetectionTests(unittest.TestCase):
             expected.parent.mkdir(parents=True)
             expected.touch()
             self.assertEqual(episode_parquet(root, 3), expected)
+
+    def test_ball_events_require_matching_contract_and_unique_episode(self) -> None:
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "ball_events.json"
+            path.write_text(json.dumps({
+                "schema": "ball-events/v1",
+                "contract": "eva-replay-g1-qpos20-v1",
+                "episodes": [{"task": "task_a", "episode_index": 0, "frame_indices": [8, 2, 8]}],
+            }), encoding="utf8")
+            self.assertEqual(
+                load_ball_events(path, "eva-replay-g1-qpos20-v1"), {("task_a", 0): [2, 8]}
+            )
+            with self.assertRaises(BallEventsError):
+                load_ball_events(path, "other-contract")
 
 
 if __name__ == "__main__":
