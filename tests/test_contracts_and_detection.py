@@ -7,6 +7,7 @@ import numpy as np
 
 from packages.contracts import load_qpos_contract
 from packages.detection import fuse_pingpong_hits, gripper_candidate_ranges, pca_motion_scores
+from packages.eva_qpos import assemble_g1_qpos, to_closed_fraction
 from packages.range_plan import make_plan
 
 
@@ -46,6 +47,48 @@ class ContractAndDetectionTests(unittest.TestCase):
             episodes=[{"task": "task_a", "episode_index": 0, "source_frames": 8, "keep_ranges": [[0, 2], [3, 4]]}],
         )
         self.assertEqual(plan["episodes"][0]["keep_ranges"], [[0, 4]])
+
+    def test_g1_qpos_uses_contract_order_and_closed_grippers(self) -> None:
+        frames = 2
+        columns = {
+            "observation.state.joint_position": np.arange(frames * 14, dtype=np.float32).reshape(frames, 14),
+            "observation.state.left_effector_position": np.array([[0.0], [120.0]], dtype=np.float32),
+            "observation.state.right_effector_position": np.array([[120.0], [0.0]], dtype=np.float32),
+            "observation.state.head_position": np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+            "observation.state.waist_position": np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32),
+            "action.joint_position": np.arange(frames * 14, dtype=np.float32).reshape(frames, 14),
+            "action.left_effector_position": np.array([[0.0], [120.0]], dtype=np.float32),
+            "action.right_effector_position": np.array([[120.0], [0.0]], dtype=np.float32),
+            "action.head_position": np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+            "action.waist_position": np.array([[5.0, 6.0], [7.0, 8.0]], dtype=np.float32),
+        }
+        assembly = assemble_g1_qpos(columns, gripper_convention="raw_encoder_0_120")
+        self.assertEqual(assembly.state.shape, (2, 20))
+        self.assertEqual(assembly.state[0, 7], 0.0)
+        self.assertEqual(assembly.state[0, 15], 1.0)
+        self.assertEqual(assembly.state[0, 16:].tolist(), [1.0, 2.0, 5.0, 6.0])
+
+    def test_opening_input_is_inverted_and_action_fallback_is_explicit(self) -> None:
+        self.assertEqual(to_closed_fraction(np.array([[0.25]], dtype=np.float32), "opening_0_1")[0, 0], 0.75)
+        columns = {
+            "observation.state.joint_position": np.zeros((1, 14), dtype=np.float32),
+            "observation.state.left_effector_position": np.zeros((1, 1), dtype=np.float32),
+            "observation.state.right_effector_position": np.zeros((1, 1), dtype=np.float32),
+            "observation.state.head_position": np.zeros((1, 2), dtype=np.float32),
+            "observation.state.waist_position": np.zeros((1, 2), dtype=np.float32),
+            "action.joint_position": np.zeros((1, 14), dtype=np.float32),
+            "action.left_effector_position": np.zeros((1, 1), dtype=np.float32),
+            "action.right_effector_position": np.zeros((1, 1), dtype=np.float32),
+        }
+        with self.assertRaises(ValueError):
+            assemble_g1_qpos(columns, gripper_convention="closed_0_1")
+        assembly = assemble_g1_qpos(
+            columns, gripper_convention="closed_0_1", allow_state_action_fallback=True
+        )
+        self.assertEqual(
+            assembly.action_fallbacks,
+            ("observation.state.head_position", "observation.state.waist_position"),
+        )
 
 
 if __name__ == "__main__":
