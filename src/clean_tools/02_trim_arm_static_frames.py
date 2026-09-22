@@ -20,6 +20,12 @@ from packages.lerobot_v21 import (
     table,
 )
 
+# qpos20 layout: left arm [0:7], right arm [8:15]; grippers/head/body are excluded.
+DEFAULT_ARM_JOINT_INDICES = "0,1,2,3,4,5,6,8,9,10,11,12,13,14"
+DEFAULT_MOTION_THRESHOLD = 1e-3
+DEFAULT_PADDING_FRAMES = 5
+DEFAULT_MIN_MOTION_RUN = 3
+
 
 def trim_video(path, start, end, fps):
     tmp = path.with_suffix(".trim.mp4")
@@ -74,10 +80,10 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--input", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
-    p.add_argument("--arm-joint-indices", default="0,1,2,3,4,5,6,8,9,10,11,12,13,14")
-    p.add_argument("--threshold", type=float, default=1e-3)
-    p.add_argument("--padding-frames", type=int, default=5)
-    p.add_argument("--min-motion-run", type=int, default=3)
+    p.add_argument("--arm-joint-indices", default=DEFAULT_ARM_JOINT_INDICES)
+    p.add_argument("--threshold", type=float, default=DEFAULT_MOTION_THRESHOLD)
+    p.add_argument("--padding-frames", type=int, default=DEFAULT_PADDING_FRAMES)
+    p.add_argument("--min-motion-run", type=int, default=DEFAULT_MIN_MOTION_RUN)
     p.add_argument("--workers", type=int, default=4)
     a = p.parse_args()
     idx = np.array([int(x) for x in a.arm_joint_indices.split(",")])

@@ -27,6 +27,12 @@ from packages.execution import ProcessLane, run_process_job_groups, run_routed_p
 from packages.contracts import load_qpos_contract
 from packages.eva_qpos import assemble_g1_qpos
 
+# Throughput tuning defaults. They are implementation policy rather than data
+# semantics, so callers normally should not need to repeat them.
+DEFAULT_WORKERS = 8
+DEFAULT_CUDA_WORKERS = 4
+DEFAULT_QSV_WORKERS = 0
+
 
 def read_json(path: Path) -> dict: return json.loads(path.read_text(encoding="utf8"))
 
@@ -257,16 +263,12 @@ def prepare_episode(args: tuple[Path,int,int,Path,dict,dict,dict,str,bool]) -> d
 
 def main() -> None:
     started=time.perf_counter()
-    p=argparse.ArgumentParser();p.add_argument('--input',type=Path,required=True,help='原始 dataset/618data；也兼容辅助预检产生的分组输出');p.add_argument('--output',type=Path,required=True);p.add_argument('--schema',type=Path,default=REPO_ROOT/'config/618_lerobot_schema.json');p.add_argument('--task-map',type=Path,default=REPO_ROOT/'config/task_id_map.json');p.add_argument('--source',type=Path,default=REPO_ROOT/'config/sources/g1.json');p.add_argument('--contract',type=Path,default=REPO_ROOT/'config/contracts/eva_replay_g1_qpos20_v1.json');p.add_argument('--gripper-convention',choices=('raw_encoder_0_120','opening_0_1','closed_0_1'),required=True);p.add_argument('--allow-state-action-fallback',action='store_true');p.add_argument('--workers',type=int,default=8);p.add_argument('--cuda-workers',type=int,default=4);p.add_argument('--qsv-workers',type=int,default=0);p.add_argument('--min-duration-s',type=float,default=0.0,help='Optional quality threshold; 0 retains every readable duration.');p.add_argument('--allow-unmapped-empty-task',action='store_true');p.add_argument('--three-cameras-only',action='store_true');p.add_argument('--dry-run',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--input',type=Path,required=True,help='原始 dataset/618data；也兼容辅助预检产生的分组输出');p.add_argument('--output',type=Path,required=True);p.add_argument('--schema',type=Path,default=REPO_ROOT/'config/618_lerobot_schema.json');p.add_argument('--task-map',type=Path,default=REPO_ROOT/'config/task_id_map.json');p.add_argument('--source',type=Path,default=REPO_ROOT/'config/sources/g1.json');p.add_argument('--contract',type=Path,default=REPO_ROOT/'config/contracts/eva_replay_g1_qpos20_v1.json');p.add_argument('--gripper-convention',choices=('raw_encoder_0_120','opening_0_1','closed_0_1'),required=True);p.add_argument('--allow-state-action-fallback',action='store_true');p.add_argument('--workers',type=int,default=DEFAULT_WORKERS);p.add_argument('--cuda-workers',type=int,default=DEFAULT_CUDA_WORKERS);p.add_argument('--qsv-workers',type=int,default=DEFAULT_QSV_WORKERS);p.add_argument('--min-duration-s',type=float,default=0.0,help='Optional quality threshold; 0 retains every readable duration.');p.add_argument('--allow-unmapped-empty-task',action='store_true');p.add_argument('--dry-run',action='store_true');a=p.parse_args()
     schema=read_json(a.schema); source_config=read_json(a.source); contract=load_qpos_contract(a.contract); mapping=read_json(a.task_map)['tasks']; raw_adapter=source_config['raw_h5_adapter']
     expected_cameras={key for key,spec in read_json(a.contract)['required_features'].items() if spec.get('dtype')=='video'}
     missing_cameras=expected_cameras-set(schema['cameras'])
     if missing_cameras: raise ValueError(f'schema is missing contract cameras: {sorted(missing_cameras)}')
     schema['cameras']={key:schema['cameras'][key] for key in expected_cameras}
-    if a.three_cameras_only:
-        keep={'observation.images.cam_high','observation.images.cam_left_wrist','observation.images.cam_right_wrist'}
-        schema['cameras']={key:value for key,value in schema['cameras'].items() if key in keep}
-        if len(schema['cameras']) != 3: raise ValueError('schema is missing one of the requested three RGB cameras')
     raw_layout=any((child/'meta_info.json').is_file() for child in a.input.iterdir() if child.is_dir())
     if raw_layout and a.allow_unmapped_empty_task: add_empty_text_task_mappings(a.input,mapping)
     raw_groups,rejected=collect_raw_episodes(a.input,mapping,a.min_duration_s,raw_adapter,a.allow_state_action_fallback,require_fisheyes=False) if raw_layout else ({},[])

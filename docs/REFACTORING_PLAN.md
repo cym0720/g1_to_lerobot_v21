@@ -37,10 +37,23 @@ EVA qpos20 converted baseline
 
 乒乓球专项只有上述两个检测步骤。统计、metadata 重建和校验是通用裁剪收尾，不是第三个检测步骤。
 
-## 当前实现顺序
+## 已完成的基础设施
 
-1. 已建立 EVA contract、通用 inclusive range-plan、夹爪候选段与 PCA/球证据融合函数。
-2. 已实现通用 splitter：它先完整只读预检输入 Parquet 和视频帧数，再在新目录切分、重编号并重建 metadata/stats。
-3. 下一步迁移 converter：按命名原始字段组装 qpos20，显式声明输入夹爪语义，写入新的 `dataset/converted/<id>`；缺失动作字段不得静默补零。
-4. 再从真实乒乓球源代码/标注迁移球检测 adapter；不从编译缓存猜阈值。
-5. 每个改写数据的阶段必须完成完整读取、帧数/metadata 一致性和 ACT loss gate。
+1. 已建立 EVA contract、G1 原始字段映射、inclusive `range-plan/v1`、夹爪候选段与 PCA/球证据融合函数。
+2. `tools/conversion/00_convert_618_to_lerobot.py` 已改写为 qpos20 输出：夹爪语义必须通过 CLI 明确传入；缺失 head/body action 默认拒绝，只有 `--allow-state-action-fallback` 才能回退到 state，并写入 provenance。
+3. `tools/split_by_ranges.py` 已实现通用切分：先完整只读预检源 Parquet 与视频，再在新目录重写片段、索引、metadata 和 stats。
+4. 普通数据入口 `run_618_pipeline.ps1` 已采用 `dataset/converted/<id>` 基线和 `output/current/data` 唯一工作副本。trim 与 action smoothing 都是显式 opt-in。
+5. qpos20 的 read/video gate、统计重算和 ACT 真实优化 smoke 已迁移；ACT 适配层只在内存把 qpos 映射到当前 LeRobot 版本硬编码的 batch key，不向磁盘写回旧字段。
+
+## 配置与参数政策
+
+- 数据契约、机器人字段映射、检测阈值属于 `config/`，不放入业务脚本的 CLI。
+- 模块内稳定的算法默认值应定义为命名常量，并在 docstring 或注释中说明单位和影响。
+- CLI 只保留输入/输出、并发度、`--dry-run`、`--debug` 与会改变数据含义的显式选择；夹爪方向属于后者，不能设不透明默认值。
+
+## 剩余迁移 / 淘汰清单
+
+1. 从真实乒乓球球检测代码或人工标注迁移 `ball-events/v1` adapter；不从编译缓存猜阈值。它只负责第二步的球帧事件，不裁剪数据。
+2. 把旧字段依赖脚本（例如 `01_overlay_g1_rollflow20.py`、`run_act_v21_native_smoke.py`、旧离群审查和 benchmark）迁移到 qpos20，或移动到 `tools/legacy/` 并加醒目弃用说明。
+3. 将转换器里仍然存在的早期兼容参数和重复媒体编码细节进一步下沉到 packages；每次移动后保留 Windows process-pool 测试。
+4. 在用户确认 618 左右夹爪的真实尺度和开闭方向后，执行一份小型真实输出，并通过完整 read/video/ACT gate；在此之前不得批量物化正式数据。
