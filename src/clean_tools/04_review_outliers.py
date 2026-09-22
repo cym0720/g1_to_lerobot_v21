@@ -20,18 +20,16 @@ from packages.lerobot_v21 import (
     write_episodes,
 )
 
+# Tail summary is deliberately short: this tool ranks review candidates only;
+# it never defines a training-data rejection rule by itself.
+DEFAULT_TAIL_FRAMES = 30
+DEFAULT_CONTAMINATION = 0.10
+
 
 def feature(t, d):
-    keys = [
-        k
-        for k in (
-            "observation.state.joint_position",
-            "action.joint_position",
-            "observation.state.joint_velocity",
-            "action.joint_velocity",
-        )
-        if k in t.column_names
-    ]
+    keys = [key for key in ("observations.state.qpos", "action.qpos") if key in t.column_names]
+    if not keys:
+        raise ValueError("dataset does not expose EVA qpos20 state/action fields")
     parts = []
     for k in keys:
         x = np.asarray(t[k].to_pylist(), dtype=np.float32)[-d:]
@@ -45,8 +43,8 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--input", type=Path, required=True)
     p.add_argument("--review-dir", type=Path, required=True)
-    p.add_argument("--tail-frames", type=int, default=30)
-    p.add_argument("--contamination", type=float, default=0.1)
+    p.add_argument("--tail-frames", type=int, default=DEFAULT_TAIL_FRAMES)
+    p.add_argument("--contamination", type=float, default=DEFAULT_CONTAMINATION)
     p.add_argument("--apply", action="store_true")
     a = p.parse_args()
     a.review_dir.mkdir(parents=True, exist_ok=True)
