@@ -5,7 +5,7 @@
                                "depth"
                            ],
     "cameras":  {
-                    "observation.images.cam_high_rgb":  {
+                    "observation.images.cam_high":  {
                                                             "source":  "camera/head_color/head_color.h265",
                                                             "timestamp_source":  "camera/head_color/head_color.txt",
                                                             "kind":  "h265_timestamp_aligned",
@@ -28,7 +28,7 @@
                                                                      },
                                                             "reference":  "对齐 robocoin 头部 RGB 尺度；转换器必须同步更新主点 ppy = 原始 ppy - 40"
                                                         },
-                    "observation.images.cam_left_wrist_rgb":  {
+                    "observation.images.cam_left_wrist":  {
                                                                   "source":  "camera/hand_left/color/*.jpg",
                                                                   "kind":  "jpg_timestamp_aligned",
                                                                   "output_shape":  [
@@ -39,7 +39,7 @@
                                                                   "transform":  "identity",
                                                                   "reference":  "robocoin"
                                                               },
-                    "observation.images.cam_right_wrist_rgb":  {
+                    "observation.images.cam_right_wrist":  {
                                                                    "source":  "camera/hand_right/color/*.jpg",
                                                                    "kind":  "jpg_timestamp_aligned",
                                                                    "output_shape":  [

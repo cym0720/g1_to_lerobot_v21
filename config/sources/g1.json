@@ -1,5 +1,21 @@
 {
   "source_id": "g1",
+  "raw_h5_adapter": {
+    "state": {
+      "observation.state.joint_position": "state/joint/position",
+      "observation.state.left_effector_position": "state/left_effector/position",
+      "observation.state.right_effector_position": "state/right_effector/position",
+      "observation.state.head_position": "state/head/position",
+      "observation.state.waist_position": "state/waist/position"
+    },
+    "action": {
+      "action.joint_position": "action/joint/position",
+      "action.left_effector_position": "action/left_effector/position",
+      "action.right_effector_position": "action/right_effector/position",
+      "action.head_position": "action/head/position",
+      "action.waist_position": "action/waist/position"
+    }
+  },
   "legacy_lerobot_adapter": {
     "state": {
       "arms": "observation.state.joint_position",

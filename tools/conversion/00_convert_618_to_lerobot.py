@@ -24,6 +24,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from packages.ffmpeg_io import encode_h265_aligned as encode_h265_ffmpeg, encode_jpeg_sequence, video_frame_count
 from packages.execution import ProcessLane, run_process_job_groups, run_routed_process_jobs, video_process_lanes
+from packages.contracts import load_qpos_contract
+from packages.eva_qpos import assemble_g1_qpos
 
 
 def read_json(path: Path) -> dict: return json.loads(path.read_text(encoding="utf8"))
@@ -31,7 +33,11 @@ def read_json(path: Path) -> dict: return json.loads(path.read_text(encoding="ut
 def timestamps(path: Path) -> np.ndarray:
     return np.asarray([int(line.split()[0]) for line in path.read_text().splitlines() if line.strip()], dtype=np.int64)
 
-def source_errors(ep: Path, min_duration_s: float, require_fisheyes: bool = True) -> tuple[dict | None, list[str]]:
+def _h5_stream_present(h5: h5py.File, data_key: str) -> bool:
+    base=data_key.rsplit('/',1)[0]; timestamp_key=base+'/timestamp'
+    return data_key in h5 and timestamp_key in h5 and len(h5[data_key]) > 0 and len(h5[timestamp_key]) > 0
+
+def source_errors(ep: Path, min_duration_s: float, raw_adapter: dict, allow_state_action_fallback: bool, require_fisheyes: bool = True) -> tuple[dict | None, list[str]]:
     """Minimal conversion preflight; authoritative dataset validation happens after conversion."""
     meta_path=ep/'meta_info.json'; errors=[]
     if not meta_path.is_file(): return None,['missing_meta_info.json']
@@ -49,8 +55,12 @@ def source_errors(ep: Path, min_duration_s: float, require_fisheyes: bool = True
     h5_path=ep/'record/raw_joints.h5'
     if h5_path.is_file():
         try:
-            with h5py.File(h5_path, 'r'):
-                pass
+            with h5py.File(h5_path, 'r') as h5:
+                for group in ('state','action'):
+                    for output, data_key in raw_adapter[group].items():
+                        fallback_allowed = allow_state_action_fallback and output in {'action.head_position','action.waist_position'}
+                        if not _h5_stream_present(h5, data_key) and not fallback_allowed:
+                            errors.append(f'missing_or_empty_{data_key}')
         except (OSError, ValueError) as exc:
             errors.append(f'invalid_raw_joints.h5:{exc}')
     stamp=ep/'camera/head_color/head_color.txt'
@@ -68,11 +78,11 @@ def source_errors(ep: Path, min_duration_s: float, require_fisheyes: bool = True
                 except (ValueError,OSError) as exc: errors.append(f'invalid_{fisheye}_timestamps:{exc}')
     return meta,errors
 
-def collect_raw_episodes(source: Path, mapping: dict, min_duration_s: float, require_fisheyes: bool = True) -> tuple[dict[str,list[Path]],list[list[str]]]:
+def collect_raw_episodes(source: Path, mapping: dict, min_duration_s: float, raw_adapter: dict, allow_state_action_fallback: bool, require_fisheyes: bool = True) -> tuple[dict[str,list[Path]],list[list[str]]]:
     """Return valid raw episodes grouped by mapped task, plus the rejection audit."""
     grouped={spec['directory']:[] for spec in mapping.values()}; rejected=[]
     for ep in sorted(x for x in source.iterdir() if x.is_dir()):
-        meta,errors=source_errors(ep,min_duration_s,require_fisheyes); task_id='' if meta is None else str(meta.get('task_id',''))
+        meta,errors=source_errors(ep,min_duration_s,raw_adapter,allow_state_action_fallback,require_fisheyes); task_id='' if meta is None else str(meta.get('task_id',''))
         spec=mapping.get(task_id)
         if spec is None and not errors: errors.append(f'unmapped_task_id:{task_id}')
         if errors:
@@ -103,6 +113,26 @@ def h5_series(h5: h5py.File, data_key: str, target: np.ndarray, shape: list[int]
     if values.ndim == 0 or len(values)==0 or len(times)==0: return np.zeros((len(target),*shape),np.float32)
     n=min(len(values),len(times)); values=values[:n]; times=times[:n]
     return np.asarray(values[nearest(times,target)],dtype=np.float32)
+
+def h5_series_required(h5: h5py.File, data_key: str, target: np.ndarray, width: int, required: bool = True) -> np.ndarray | None:
+    """Read a named G1 component; no fabricated zeros for missing contract fields."""
+    if not _h5_stream_present(h5, data_key):
+        if required: raise ValueError(f'missing or empty required H5 stream: {data_key}')
+        return None
+    base=data_key.rsplit('/',1)[0]; values=np.asarray(h5[data_key]); times=np.asarray(h5[base+'/timestamp'])
+    n=min(len(values),len(times)); values=values[:n]; times=times[:n]
+    result=np.asarray(values[nearest(times,target)],dtype=np.float32).reshape(len(target),-1)
+    if result.shape[1] != width or not np.isfinite(result).all(): raise ValueError(f'{data_key}: expected finite width {width}, got {result.shape}')
+    return result
+
+def read_g1_qpos_inputs(h5: h5py.File, target: np.ndarray, raw_adapter: dict) -> dict[str,np.ndarray]:
+    widths={'observation.state.joint_position':14,'observation.state.left_effector_position':1,'observation.state.right_effector_position':1,'observation.state.head_position':2,'observation.state.waist_position':2,'action.joint_position':14,'action.left_effector_position':1,'action.right_effector_position':1,'action.head_position':2,'action.waist_position':2}
+    columns: dict[str,np.ndarray]={}
+    for group in ('state','action'):
+        for name,data_key in raw_adapter[group].items():
+            values=h5_series_required(h5,data_key,target,widths[name],required=name not in {'action.head_position','action.waist_position'})
+            if values is not None: columns[name]=values
+    return columns
 
 def encode_h265_aligned_pyav(ep: Path, spec: dict, target: np.ndarray, dest: Path, fps: int) -> None:
     """Timestamp-align an encoded RGB/fisheye stream to the canonical head clock."""
@@ -200,25 +230,19 @@ def rgb_range_stats(count: int) -> dict:
     return {'min':[[[0.0]],[[0.0]],[[0.0]]],'max':[[[1.0]],[[1.0]],[[1.0]]],
             'mean':[[[0.5]],[[0.5]],[[0.5]]],'std':[[[0.25]],[[0.25]],[[0.25]]],'count':[count]}
 
-def prepare_episode(args: tuple[Path,int,int,Path,dict,dict,object]) -> dict:
-    ep,index,offset,root,schema,task,_lane_payload=args; meta=read_json(ep/'meta_info.json'); target=timestamps(ep/'camera/head_color/head_color.txt'); fps=int(schema['fps'])
+def prepare_episode(args: tuple[Path,int,int,Path,dict,dict,dict,str,bool]) -> dict:
+    ep,index,offset,root,schema,task,raw_adapter,gripper_convention,allow_state_action_fallback=args; meta=read_json(ep/'meta_info.json'); target=timestamps(ep/'camera/head_color/head_color.txt'); fps=int(schema['fps'])
     numeric={}
     with h5py.File(ep/'record/raw_joints.h5','r') as h5:
         # Source device timestamps align heterogeneous H5 streams, but encoded
         # MP4 is CFR at schema fps. LeRobot requires its parquet timestamps to
         # use the same exact CFR clock for deterministic frame lookup.
         columns={'timestamp':pa.array((np.arange(len(target),dtype=np.float32)/fps),type=pa.float32()),'frame_index':pa.array(np.arange(len(target),dtype='int64')),'episode_index':pa.array(np.full(len(target),index,dtype='int64')),'index':pa.array(np.arange(len(target),dtype='int64')+offset),'task_index':pa.array(np.zeros(len(target),dtype='int64'))}
-        features={}
-        for output,spec in {**schema['state_features'],**schema['action_features']}.items():
-            values=h5_series(h5,spec['source'],target,spec['shape']); numeric[output]=values; columns[output]=float_column(values,spec['shape']); features[output]={'dtype':'float32','shape':spec['shape'],'names':None}
-    # Keep the named source streams above for traceability, and add the two canonical
-    # LeRobot keys required by off-the-shelf ACT (`observation.state` and `action`).
-    state=np.concatenate([numeric[key] for key in schema['state_canonical']['sources']],axis=1)
-    action=np.concatenate([numeric[key] for key in schema['action_canonical']['sources']],axis=1)
-    numeric['observation.state']=state; numeric['action']=action
-    columns['observation.state']=float_column(state,[int(state.shape[1])]); columns['action']=float_column(action,[int(action.shape[1])])
-    features['observation.state']={'dtype':'float32','shape':[int(state.shape[1])],'names':None}
-    features['action']={'dtype':'float32','shape':[int(action.shape[1])],'names':None}
+        assembly=assemble_g1_qpos(read_g1_qpos_inputs(h5,target,raw_adapter),gripper_convention=gripper_convention,allow_state_action_fallback=allow_state_action_fallback)
+        state,action=assembly.state,assembly.action
+        numeric['observations.state.qpos']=state; numeric['action.qpos']=action
+        columns['observations.state.qpos']=float_column(state,[20]); columns['action.qpos']=float_column(action,[20])
+        features={'observations.state.qpos':{'dtype':'float32','shape':[20],'names':None},'action.qpos':{'dtype':'float32','shape':[20],'names':None}}
     numeric.update({'timestamp':np.arange(len(target),dtype=np.float32)/fps, 'frame_index':np.arange(len(target),dtype='int64'), 'episode_index':np.full(len(target),index,dtype='int64'), 'index':np.arange(len(target),dtype='int64')+offset, 'task_index':np.zeros(len(target),dtype='int64')})
     for key,spec in schema['cameras'].items():
         # v3 stores video frame timing/ranges in meta/episodes, not as a data
@@ -229,21 +253,28 @@ def prepare_episode(args: tuple[Path,int,int,Path,dict,dict,object]) -> dict:
     errors=[]
     episode_stats={key:stats_for(value) for key,value in numeric.items()}
     episode_stats.update({key:rgb_range_stats(len(target)) for key in schema['cameras']})
-    return {'episode_index':index,'tasks':[task['name']],'length':len(target),'dataset_from_index':offset,'dataset_to_index':offset+len(target),'original_episode_id':ep.name,'source_task_id':meta['task_id'],'features':features,'stats':episode_stats,'validation_errors':errors}
+    return {'episode_index':index,'tasks':[task['name']],'length':len(target),'dataset_from_index':offset,'dataset_to_index':offset+len(target),'original_episode_id':ep.name,'source_task_id':meta['task_id'],'features':features,'stats':episode_stats,'action_fallbacks':list(assembly.action_fallbacks),'validation_errors':errors}
 
 def main() -> None:
     started=time.perf_counter()
-    p=argparse.ArgumentParser();p.add_argument('--input',type=Path,required=True,help='原始 dataset/618data；也兼容辅助预检产生的分组输出');p.add_argument('--output',type=Path,required=True);p.add_argument('--schema',type=Path,default=REPO_ROOT/'config/618_lerobot_schema.json');p.add_argument('--task-map',type=Path,default=REPO_ROOT/'config/task_id_map.json');p.add_argument('--fields',type=Path,default=REPO_ROOT/'config/618_field_definitions.json');p.add_argument('--workers',type=int,default=8);p.add_argument('--cuda-workers',type=int,default=4);p.add_argument('--qsv-workers',type=int,default=0);p.add_argument('--min-duration-s',type=float,default=8.0);p.add_argument('--allow-unmapped-empty-task',action='store_true');p.add_argument('--three-cameras-only',action='store_true');a=p.parse_args()
-    if a.output.exists(): raise SystemExit(f'输出已存在: {a.output}')
-    schema=read_json(a.schema); field_definitions=read_json(a.fields); schema.update(field_definitions); mapping=read_json(a.task_map)['tasks'];
+    p=argparse.ArgumentParser();p.add_argument('--input',type=Path,required=True,help='原始 dataset/618data；也兼容辅助预检产生的分组输出');p.add_argument('--output',type=Path,required=True);p.add_argument('--schema',type=Path,default=REPO_ROOT/'config/618_lerobot_schema.json');p.add_argument('--task-map',type=Path,default=REPO_ROOT/'config/task_id_map.json');p.add_argument('--source',type=Path,default=REPO_ROOT/'config/sources/g1.json');p.add_argument('--contract',type=Path,default=REPO_ROOT/'config/contracts/eva_replay_g1_qpos20_v1.json');p.add_argument('--gripper-convention',choices=('raw_encoder_0_120','opening_0_1','closed_0_1'),required=True);p.add_argument('--allow-state-action-fallback',action='store_true');p.add_argument('--workers',type=int,default=8);p.add_argument('--cuda-workers',type=int,default=4);p.add_argument('--qsv-workers',type=int,default=0);p.add_argument('--min-duration-s',type=float,default=0.0,help='Optional quality threshold; 0 retains every readable duration.');p.add_argument('--allow-unmapped-empty-task',action='store_true');p.add_argument('--three-cameras-only',action='store_true');p.add_argument('--dry-run',action='store_true');a=p.parse_args()
+    schema=read_json(a.schema); source_config=read_json(a.source); contract=load_qpos_contract(a.contract); mapping=read_json(a.task_map)['tasks']; raw_adapter=source_config['raw_h5_adapter']
+    expected_cameras={key for key,spec in read_json(a.contract)['required_features'].items() if spec.get('dtype')=='video'}
+    missing_cameras=expected_cameras-set(schema['cameras'])
+    if missing_cameras: raise ValueError(f'schema is missing contract cameras: {sorted(missing_cameras)}')
+    schema['cameras']={key:schema['cameras'][key] for key in expected_cameras}
     if a.three_cameras_only:
-        keep={'observation.images.cam_high_rgb','observation.images.cam_left_wrist_rgb','observation.images.cam_right_wrist_rgb'}
+        keep={'observation.images.cam_high','observation.images.cam_left_wrist','observation.images.cam_right_wrist'}
         schema['cameras']={key:value for key,value in schema['cameras'].items() if key in keep}
         if len(schema['cameras']) != 3: raise ValueError('schema is missing one of the requested three RGB cameras')
-    a.output.mkdir(parents=True)
     raw_layout=any((child/'meta_info.json').is_file() for child in a.input.iterdir() if child.is_dir())
     if raw_layout and a.allow_unmapped_empty_task: add_empty_text_task_mappings(a.input,mapping)
-    raw_groups,rejected=collect_raw_episodes(a.input,mapping,a.min_duration_s,require_fisheyes=not a.three_cameras_only) if raw_layout else ({},[])
+    raw_groups,rejected=collect_raw_episodes(a.input,mapping,a.min_duration_s,raw_adapter,a.allow_state_action_fallback,require_fisheyes=False) if raw_layout else ({},[])
+    if a.dry_run:
+        accepted=sum(len(group) for group in raw_groups.values())
+        print(json.dumps({'contract':contract.contract_id,'accepted_episodes':accepted,'rejected_episodes':len(rejected),'rejections':rejected[:20]},ensure_ascii=False,indent=2)); return
+    if a.output.exists(): raise SystemExit(f'输出已存在: {a.output}')
+    a.output.mkdir(parents=True)
     if raw_layout:
         with (a.output/'conversion_rejected.csv').open('w',newline='',encoding='utf8') as file:
             csv.writer(file).writerows([['episode_uuid','task_id','rejection'],*rejected])
@@ -254,7 +285,7 @@ def main() -> None:
         targets=[timestamps(ep/'camera/head_color/head_color.txt') for ep in eps]
         lengths=[len(target) for target in targets]
         offsets=np.cumsum([0,*lengths[:-1]]).tolist()
-        jobs=[(ep,i,offset,root,schema,spec) for i,(ep,offset) in enumerate(zip(eps,offsets))]
+        jobs=[(ep,i,offset,root,schema,spec,raw_adapter,a.gripper_convention,a.allow_state_action_fallback) for i,(ep,offset) in enumerate(zip(eps,offsets))]
         plans.append({'spec':spec,'root':root,'lengths':lengths,'start':len(prepare_jobs),'count':len(jobs)})
         prepare_jobs.extend(jobs)
         for index,(ep,target) in enumerate(zip(eps,targets)):
@@ -294,14 +325,14 @@ def main() -> None:
             episode_result['validation_errors']=[*camera_errors.get(key,[]),*validation]
         features={'timestamp':{'dtype':'float32','shape':[1],'names':None},'frame_index':{'dtype':'int64','shape':[1],'names':None},'episode_index':{'dtype':'int64','shape':[1],'names':None},'index':{'dtype':'int64','shape':[1],'names':None},'task_index':{'dtype':'int64','shape':[1],'names':None}}
         if result: features.update(result[0]['features'])
-        info={'codebase_version':'v2.1','robot_type':'A2D','fps':schema['fps'],'total_episodes':len(result),'total_frames':sum(lengths),'total_tasks':1,'total_videos':len(schema['cameras'])*len(result),'total_chunks':1,'chunks_size':1000,'splits':{'train':f'0:{len(result)}'},'data_path':'data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet','video_path':'videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4','features':features}
+        info={'codebase_version':'v2.1','robot_type':'G1','fps':schema['fps'],'total_episodes':len(result),'total_frames':sum(lengths),'total_tasks':1,'total_videos':len(schema['cameras'])*len(result),'total_chunks':1,'chunks_size':1000,'splits':{'train':f'0:{len(result)}'},'data_path':'data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet','video_path':'videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4','features':features,'conversion_provenance':{'contract':contract.contract_id,'gripper_convention':a.gripper_convention,'gripper_semantic':'closed_fraction','allow_state_action_fallback':a.allow_state_action_fallback}}
         (root/'meta/info.json').write_text(json.dumps(info,indent=2),encoding='utf8')
         (root/'meta/episodes.jsonl').write_text(''.join(json.dumps({k:v for k,v in x.items() if k not in ('features','validation_errors','stats')},ensure_ascii=False)+'\n' for x in result),encoding='utf8')
         (root/'meta/episodes_stats.jsonl').write_text(''.join(json.dumps({'episode_index':x['episode_index'],'stats':x['stats']},ensure_ascii=False)+'\n' for x in result),encoding='utf8')
         (root/'meta/tasks.jsonl').write_text(json.dumps({'task_index':0,'task':spec['name']},ensure_ascii=False)+'\n',encoding='utf8')
         (root/'meta/stats.json').write_text('{}',encoding='utf8')
         with (root/'conversion_validation.csv').open('w',newline='',encoding='utf8') as file:
-            csv.writer(file).writerows([['episode_index','original_episode_id','frames','validation'],*[[x['episode_index'],x['original_episode_id'],x['length'],';'.join(x['validation_errors']) or 'ok'] for x in result]])
+            csv.writer(file).writerows([['episode_index','original_episode_id','frames','action_fallbacks','validation'],*[[x['episode_index'],x['original_episode_id'],x['length'],';'.join(x['action_fallbacks']),' ;'.join(x['validation_errors']) or 'ok'] for x in result]])
         print(spec['directory'],len(result),'episodes')
     print(f'elapsed_seconds={time.perf_counter()-started:.3f}', flush=True)
 if __name__=='__main__': main()
