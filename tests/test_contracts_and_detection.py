@@ -15,7 +15,12 @@ from packages.detection import fuse_pingpong_hits, gripper_candidate_ranges, pca
 from packages.eva_qpos import assemble_g1_qpos, to_closed_fraction
 from packages.range_plan import make_plan
 from packages.lerobot_v21 import episode_parquet
-from packages.ball_events import BallEventsError, load_ball_events
+from packages.ball_events import (
+    BallEventsError,
+    index_ball_events,
+    load_ball_events,
+    make_ball_events,
+)
 from packages.dataset_split import preflight_split, split_dataset, validate_split_task
 from packages.ffmpeg_io import video_frame_count
 
@@ -148,6 +153,16 @@ class ContractAndDetectionTests(unittest.TestCase):
             )
             with self.assertRaises(BallEventsError):
                 load_ball_events(path, "other-contract")
+
+    def test_ball_events_builder_deduplicates_detector_rows(self) -> None:
+        payload = make_ball_events(
+            "eva-replay-g1-qpos20-v1",
+            [("task_b", 1, 8), ("task_b", 1, 2), ("task_b", 1, 8)],
+        )
+        self.assertEqual(payload["episodes"][0]["frame_indices"], [2, 8])
+        self.assertEqual(
+            index_ball_events(payload, "eva-replay-g1-qpos20-v1"), {("task_b", 1): [2, 8]}
+        )
 
     def test_generic_split_rewrites_dataset_and_videos(self) -> None:
         """A material split must prove Parquet, indexes, metadata and video agree."""

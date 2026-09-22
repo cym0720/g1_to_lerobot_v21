@@ -31,3 +31,12 @@
 ```
 
 球检测器只负责写这个证据 JSON；它不裁剪数据，也不决定最终区间。
+
+如果检测器或人工审核先产生 CSV，可用 `import_ball_events.py` 转换。CSV 固定三列：
+
+```csv
+task,episode_index,frame_index
+task_name,0,120
+```
+
+它可选接收第一步候选计划以检查 task、episode 和帧边界；不会从 CSV 推断球是否真的存在。
