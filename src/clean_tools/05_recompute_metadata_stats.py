@@ -3,12 +3,21 @@ from __future__ import annotations
 
 import argparse
 import json
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
+import sys
+import time
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+import av
 import av
 import numpy as np
 import pyarrow.parquet as pq
+
+from packages.ffmpeg_io import rgb_video_stats
 
 
 def jsonl(path: Path) -> list[dict]:
@@ -27,7 +36,7 @@ def array_stats(values: np.ndarray, image: bool = False) -> dict:
             'mean':data.mean(0).tolist(),'std':data.std(0).tolist(),'count':[int(len(data))]}
 
 
-def video_stats(path: Path) -> dict:
+def video_stats_pyav(path: Path) -> dict:
     lo=np.full(3,np.inf); hi=np.full(3,-np.inf); total=np.zeros(3); square=np.zeros(3); pixels=0; frames=0
     with av.open(str(path)) as container:
         stream=container.streams.video[0]
@@ -41,6 +50,9 @@ def video_stats(path: Path) -> dict:
             'mean':mean.reshape(3,1,1).tolist(),'std':np.sqrt(var).reshape(3,1,1).tolist(),'count':[frames]}
 
 
+def video_stats(path: Path, compute_rgb_stats: bool = False) -> dict:
+    """Use FFmpeg streaming RGB statistics only when explicitly requested."""
+    return rgb_video_stats(path) if compute_rgb_stats else video_stats_pyav(path)
 def combine(parts: list[dict]) -> dict:
     """Combine population mean/std using episode frame counts."""
     n=0; mean=None; m2=None; lo=None; hi=None
@@ -55,20 +67,26 @@ def combine(parts: list[dict]) -> dict:
     return {'min':lo.tolist(),'max':hi.tolist(),'mean':mean.tolist(),'std':np.sqrt(m2/n).tolist(),'count':[n]}
 
 
-def episode_stats(root: Path, episode: dict, numeric: list[str], cameras: list[str]) -> tuple[int,dict]:
+def episode_stats(root: Path, episode: dict, numeric: list[str], cameras: list[str], compute_rgb_stats: bool = False) -> tuple[int,dict]:
     index=int(episode['episode_index']); table=pq.read_table(root/'data/chunk-000'/f'episode_{index:06d}.parquet')
     stats={}
     for key in numeric:
         stats[key]=array_stats(np.asarray(table[key].to_pylist()))
     for camera in cameras:
-        stats[camera]=video_stats(root/'videos/chunk-000'/camera/f'episode_{index:06d}.mp4')
+        stats[camera]=video_stats(root/'videos/chunk-000'/camera/f'episode_{index:06d}.mp4', compute_rgb_stats)
     return index,stats
 
 
+def episode_stats_job(job: tuple[Path, dict, list[str], list[str], bool]) -> tuple[int, dict]:
+    return episode_stats(*job)
+
+
 def main() -> None:
+    started=time.perf_counter()
     parser=argparse.ArgumentParser(description='Recompute LeRobot v2.1 metadata statistics in place.')
     parser.add_argument('--input',type=Path,required=True,help='03/04 后的 LeRobot v2.1 任务根目录')
     parser.add_argument('--workers',type=int,default=3)
+    parser.add_argument('--compute-rgb-stats',action='store_true',help='Decode RGB through FFmpeg and calculate true per-channel image statistics.')
     parser.add_argument('--tasks',nargs='*',help='仅重算指定任务目录，例如 02_task_05 03_task_06')
     args=parser.parse_args()
     selected=set(args.tasks or [])
@@ -81,14 +99,16 @@ def main() -> None:
         features=info['features']; cameras=[key for key,value in features.items() if value['dtype']=='video']
         numeric=[key for key,value in features.items() if value['dtype']!='video']
         episodes=jsonl(root/'meta/episodes.jsonl')
-        with ThreadPoolExecutor(max_workers=max(1,args.workers)) as pool:
-            computed=list(pool.map(lambda episode: episode_stats(root,episode,numeric,cameras),episodes))
+        jobs=[(root, episode, numeric, cameras, args.compute_rgb_stats) for episode in episodes]
+        with ProcessPoolExecutor(max_workers=max(1,args.workers)) as pool:
+            computed=list(pool.map(episode_stats_job,jobs))
         computed.sort(key=lambda x:x[0])
         per_episode=[{'episode_index':index,'stats':stats} for index,stats in computed]
         (root/'meta/episodes_stats.jsonl').write_text(''.join(json.dumps(row,ensure_ascii=False)+'\n' for row in per_episode),encoding='utf8')
         aggregate={key:combine([stats[key] for _,stats in computed]) for key in [*numeric,*cameras]}
         (root/'meta/stats.json').write_text(json.dumps(aggregate,ensure_ascii=False,indent=2),encoding='utf8')
         print(f'{root.name}: episodes={len(computed)} features={len(aggregate)}')
+    print(f'elapsed_seconds={time.perf_counter()-started:.3f}', flush=True)
 
 
 if __name__=='__main__': main()

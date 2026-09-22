@@ -1,19 +1,19 @@
 {
-  "description": "618data 的 task_id 到人工任务名/输出目录映射。确认 piper/yellow 对应编号后只改 name 和 directory，不改 task_id。",
+  "description": "618data 的 task_id 到人工任务名/输出目录映射。任务文本是训练时的语言提示词；只改 name，不改 task_id 或 directory。",
   "tasks": {
     "4": {
       "order": 1,
-      "name": "pick the piper to the plate",
+      "name": "pick the red pepper to the pink plate",
       "directory": "01_task_04"
     },
     "5": {
       "order": 2,
-      "name": "pick the piper to the plate",
+      "name": "pick the yellow pepper to the pink plate",
       "directory": "02_task_05"
     },
     "6": {
       "order": 3,
-      "name": "pick the mango to the plate",
+      "name": "pick the mango to the pink plate",
       "directory": "03_task_06"
     }
   }

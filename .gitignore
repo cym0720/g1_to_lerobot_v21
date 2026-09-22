@@ -8,3 +8,18 @@ __pycache__/
 *.log
 .vscode/
 debug.log
+
+# Local Python virtual environment created for deployment/testing.
+bin/
+lib/
+lib64
+pyvenv.cfg
+
+# Generated deployment archives and their unpacked staging directory.
+starvla_act_deployment/
+starvla_act_deployment.zip
+act_training_package.zip
+
+# Independently versioned upstream framework/vendor checkouts.
+external/
+vendor/

@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
+import sys
 import csv
 import json
 import os
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import av
@@ -17,13 +18,20 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from packages.ffmpeg_io import encode_h265_aligned as encode_h265_ffmpeg, encode_jpeg_sequence, video_frame_count
+from packages.execution import ProcessLane, run_process_job_groups, run_routed_process_jobs, video_process_lanes
+
 
 def read_json(path: Path) -> dict: return json.loads(path.read_text(encoding="utf8"))
 
 def timestamps(path: Path) -> np.ndarray:
     return np.asarray([int(line.split()[0]) for line in path.read_text().splitlines() if line.strip()], dtype=np.int64)
 
-def source_errors(ep: Path, min_duration_s: float) -> tuple[dict | None, list[str]]:
+def source_errors(ep: Path, min_duration_s: float, require_fisheyes: bool = True) -> tuple[dict | None, list[str]]:
     """Minimal conversion preflight; authoritative dataset validation happens after conversion."""
     meta_path=ep/'meta_info.json'; errors=[]
     if not meta_path.is_file(): return None,['missing_meta_info.json']
@@ -33,28 +41,56 @@ def source_errors(ep: Path, min_duration_s: float) -> tuple[dict | None, list[st
         if not (ep/relative).is_file(): errors.append(f'missing_{relative}')
     for wrist in ('hand_left','hand_right'):
         if not list((ep/'camera'/wrist/'color').glob('*.jpg')): errors.append(f'missing_{wrist}_jpg')
-    for fisheye in ('head_center_fisheye','head_left_fisheye','head_right_fisheye'):
-        for suffix in ('.h265','.txt'):
-            if not (ep/'camera'/fisheye/f'{fisheye}{suffix}').is_file(): errors.append(f'missing_{fisheye}{suffix}')
+    fisheyes=('head_center_fisheye','head_left_fisheye','head_right_fisheye')
+    if require_fisheyes:
+        for fisheye in fisheyes:
+            for suffix in ('.h265','.txt'):
+                if not (ep/'camera'/fisheye/f'{fisheye}{suffix}').is_file(): errors.append(f'missing_{fisheye}{suffix}')
+    h5_path=ep/'record/raw_joints.h5'
+    if h5_path.is_file():
+        try:
+            with h5py.File(h5_path, 'r'):
+                pass
+        except (OSError, ValueError) as exc:
+            errors.append(f'invalid_raw_joints.h5:{exc}')
     stamp=ep/'camera/head_color/head_color.txt'
     if stamp.is_file():
         try:
             values=timestamps(stamp); duration=(values[-1]-values[0])/1e9 if len(values)>=2 else 0.0
             if duration<min_duration_s: errors.append(f'too_short_head_duration_s:{duration:.3f}<{min_duration_s:g}')
         except (ValueError,OSError) as exc: errors.append(f'invalid_head_timestamps:{exc}')
+    if require_fisheyes:
+        for fisheye in fisheyes:
+            stamp=ep/'camera'/fisheye/f'{fisheye}.txt'
+            if stamp.is_file():
+                try:
+                    if len(timestamps(stamp)) == 0: errors.append(f'empty_{fisheye}_timestamps')
+                except (ValueError,OSError) as exc: errors.append(f'invalid_{fisheye}_timestamps:{exc}')
     return meta,errors
 
-def collect_raw_episodes(source: Path, mapping: dict, min_duration_s: float) -> tuple[dict[str,list[Path]],list[list[str]]]:
+def collect_raw_episodes(source: Path, mapping: dict, min_duration_s: float, require_fisheyes: bool = True) -> tuple[dict[str,list[Path]],list[list[str]]]:
     """Return valid raw episodes grouped by mapped task, plus the rejection audit."""
     grouped={spec['directory']:[] for spec in mapping.values()}; rejected=[]
     for ep in sorted(x for x in source.iterdir() if x.is_dir()):
-        meta,errors=source_errors(ep,min_duration_s); task_id='' if meta is None else str(meta.get('task_id',''))
+        meta,errors=source_errors(ep,min_duration_s,require_fisheyes); task_id='' if meta is None else str(meta.get('task_id',''))
         spec=mapping.get(task_id)
         if spec is None and not errors: errors.append(f'unmapped_task_id:{task_id}')
         if errors:
             rejected.append([ep.name,task_id,';'.join(errors)]); continue
         grouped[spec['directory']].append(ep)
     return grouped,rejected
+
+def add_empty_text_task_mappings(source: Path, mapping: dict) -> None:
+    for episode in source.iterdir():
+        meta_path = episode / 'meta_info.json'
+        if not episode.is_dir() or not meta_path.is_file():
+            continue
+        try:
+            task_id = str(read_json(meta_path).get('task_id', ''))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if task_id and task_id not in mapping:
+            mapping[task_id] = {'order': 1000 + int(task_id) if task_id.isdigit() else 9999, 'name': '', 'directory': f'empty_text_task_{task_id}'}
 
 def nearest(values: np.ndarray, target: np.ndarray) -> np.ndarray:
     right=np.searchsorted(values,target,side="left"); left=np.clip(right-1,0,len(values)-1); right=np.clip(right,0,len(values)-1)
@@ -68,7 +104,7 @@ def h5_series(h5: h5py.File, data_key: str, target: np.ndarray, shape: list[int]
     n=min(len(values),len(times)); values=values[:n]; times=times[:n]
     return np.asarray(values[nearest(times,target)],dtype=np.float32)
 
-def encode_h265_aligned(ep: Path, spec: dict, target: np.ndarray, dest: Path, fps: int) -> None:
+def encode_h265_aligned_pyav(ep: Path, spec: dict, target: np.ndarray, dest: Path, fps: int) -> None:
     """Timestamp-align an encoded RGB/fisheye stream to the canonical head clock."""
     source_times=timestamps(ep/spec['timestamp_source']); selected=nearest(source_times,target)
     wanted: dict[int,int]={}
@@ -89,18 +125,41 @@ def encode_h265_aligned(ep: Path, spec: dict, target: np.ndarray, dest: Path, fp
         for packet in stream.encode(): writer.mux(packet)
     if written != len(target): raise ValueError(f'{ep.name}: {spec["source"]} decoded {written}/{len(target)} aligned frames')
 
-def encode_wrist(ep: Path, camera: str, target: np.ndarray, dest: Path, fps: int) -> None:
-    files=sorted((ep/'camera'/camera/'color').glob('*.jpg'))
-    source_ts=np.asarray([int(x.stem) for x in files],dtype=np.int64); selected=[files[i] for i in nearest(source_ts,target)]
-    dest.parent.mkdir(parents=True,exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='618_frames_') as temp:
-        td=Path(temp)
-        for i,src in enumerate(selected):
-            target_file=td/f'{i:06d}.jpg'
-            try: os.link(src,target_file)
-            except OSError: shutil.copy2(src,target_file)
-        subprocess.run(["ffmpeg","-y","-loglevel","error","-framerate",str(fps),"-i",str(td/'%06d.jpg'),"-frames:v",str(len(selected)),"-c:v","libx264","-pix_fmt","yuv420p","-crf","20",str(dest)],check=True)
-
+def encode_h265_aligned(ep: Path, spec: dict, target: np.ndarray, dest: Path, fps: int, preferred_backends: tuple[str, ...]) -> str:
+    """Use FFmpeg hardware decode/encode; retain PyAV only for duplicate-frame compatibility."""
+    source_times = timestamps(ep / spec['timestamp_source'])
+    try:
+        backend = encode_h265_ffmpeg(ep / spec['source'], source_times, target, dest, fps, spec.get('crop'), preferred_backends)
+        print(f"{ep.name} {spec['source']} backend={backend}")
+        return backend
+    except ValueError as error:
+        if 'duplicate timestamp-aligned' not in str(error):
+            raise
+        encode_h265_aligned_pyav(ep, spec, target, dest, fps)
+        return 'pyav'
+def encode_wrist(ep: Path, camera: str, target: np.ndarray, dest: Path, fps: int) -> str:
+    files = sorted((ep / 'camera' / camera / 'color').glob('*.jpg'))
+    source_ts = np.asarray([int(path.stem) for path in files], dtype=np.int64)
+    selected = [files[index] for index in nearest(source_ts, target)]
+    backend = encode_jpeg_sequence(selected, dest, fps)
+    print(f"{ep.name} {camera} backend={backend}")
+    return backend
+def convert_camera(args: tuple[Path,int,Path,str,dict,np.ndarray,int,tuple[str,...]]) -> dict:
+    ep,index,root,camera,spec,target,fps,backends=args
+    destination=root/'videos/chunk-000'/camera/f'episode_{index:06d}.mp4'
+    try:
+        if spec['kind']=='jpg_timestamp_aligned':
+            source_camera='hand_left' if 'left_wrist' in camera else 'hand_right'
+            backend=encode_wrist(ep,source_camera,target,destination,fps)
+        elif spec['kind']=='h265_timestamp_aligned':
+            backend=encode_h265_aligned(ep,spec,target,destination,fps,backends)
+        else:
+            raise ValueError(f'unknown camera kind: {spec["kind"]}')
+        frames=video_frame_count(destination)
+        error='' if frames==len(target) else f'video_frames:{camera}:{frames}!={len(target)}'
+    except Exception as exc:
+        backend=backends[0] if backends else 'unknown'; error=f'{camera}:{type(exc).__name__}:{exc}'
+    return {'root':str(root),'episode_index':index,'camera':camera,'backend':backend,'error':error}
 def video_frames(path: Path) -> int:
     result=subprocess.run(["ffprobe","-v","error","-select_streams","v:0","-count_frames","-show_entries","stream=nb_read_frames","-of","default=nokey=1:noprint_wrappers=1",str(path)],capture_output=True,text=True,check=True)
     return int(result.stdout.strip())
@@ -114,7 +173,7 @@ def validate_episode_output(root: Path, index: int, expected: int, cameras: list
     for camera in cameras:
         path=root/'videos/chunk-000'/camera/f'episode_{index:06d}.mp4'
         if not path.exists(): errors.append(f'missing_video:{camera}')
-        elif video_frames(path) != expected: errors.append(f'video_frames:{camera}')
+        elif video_frame_count(path) != expected: errors.append(f'video_frames:{camera}')
     return errors
 
 def stats_for(values: np.ndarray) -> dict:
@@ -141,8 +200,8 @@ def rgb_range_stats(count: int) -> dict:
     return {'min':[[[0.0]],[[0.0]],[[0.0]]],'max':[[[1.0]],[[1.0]],[[1.0]]],
             'mean':[[[0.5]],[[0.5]],[[0.5]]],'std':[[[0.25]],[[0.25]],[[0.25]]],'count':[count]}
 
-def convert_episode(args: tuple[Path,int,int,Path,dict,dict]) -> dict:
-    ep,index,offset,root,schema,task=args; meta=read_json(ep/'meta_info.json'); target=timestamps(ep/'camera/head_color/head_color.txt'); fps=int(schema['fps'])
+def prepare_episode(args: tuple[Path,int,int,Path,dict,dict,object]) -> dict:
+    ep,index,offset,root,schema,task,_lane_payload=args; meta=read_json(ep/'meta_info.json'); target=timestamps(ep/'camera/head_color/head_color.txt'); fps=int(schema['fps'])
     numeric={}
     with h5py.File(ep/'record/raw_joints.h5','r') as h5:
         # Source device timestamps align heterogeneous H5 streams, but encoded
@@ -154,8 +213,8 @@ def convert_episode(args: tuple[Path,int,int,Path,dict,dict]) -> dict:
             values=h5_series(h5,spec['source'],target,spec['shape']); numeric[output]=values; columns[output]=float_column(values,spec['shape']); features[output]={'dtype':'float32','shape':spec['shape'],'names':None}
     # Keep the named source streams above for traceability, and add the two canonical
     # LeRobot keys required by off-the-shelf ACT (`observation.state` and `action`).
-    state=np.concatenate([numeric[key] for key in schema['state_features']],axis=1)
-    action=np.concatenate([numeric[key] for key in schema['action_features']],axis=1)
+    state=np.concatenate([numeric[key] for key in schema['state_canonical']['sources']],axis=1)
+    action=np.concatenate([numeric[key] for key in schema['action_canonical']['sources']],axis=1)
     numeric['observation.state']=state; numeric['action']=action
     columns['observation.state']=float_column(state,[int(state.shape[1])]); columns['action']=float_column(action,[int(action.shape[1])])
     features['observation.state']={'dtype':'float32','shape':[int(state.shape[1])],'names':None}
@@ -167,39 +226,72 @@ def convert_episode(args: tuple[Path,int,int,Path,dict,dict]) -> dict:
         # v2.1->v3 loader because it deliberately excludes video columns.
         features[key]={'dtype':'video','shape':spec['output_shape'],'names':['height','width','channels'],'info':{'video.height':spec['output_shape'][0],'video.width':spec['output_shape'][1],'video.channels':3,'video.fps':float(fps),'video.codec':'h264','video.pix_fmt':'yuv420p','video.is_depth_map':False,'has_audio':False}}
     data=root/'data/chunk-000'/f'episode_{index:06d}.parquet';data.parent.mkdir(parents=True,exist_ok=True);pq.write_table(pa.table(columns),data,compression='snappy')
-    paths={camera:root/'videos/chunk-000'/camera/f'episode_{index:06d}.mp4' for camera in schema['cameras']}
-    for attempt in range(2):
-        for camera,spec in schema['cameras'].items():
-            if spec['kind']=='jpg_timestamp_aligned':
-                source_camera='hand_left' if 'left_wrist' in camera else 'hand_right'
-                encode_wrist(ep,source_camera,target,paths[camera],fps)
-            elif spec['kind']=='h265_timestamp_aligned':
-                encode_h265_aligned(ep,spec,target,paths[camera],fps)
-            else: raise ValueError(f'unknown camera kind: {spec["kind"]}')
-        errors=validate_episode_output(root,index,len(target),list(schema['cameras']))
-        if not errors: break
-        for path in paths.values():
-            path.unlink(missing_ok=True)
+    errors=[]
     episode_stats={key:stats_for(value) for key,value in numeric.items()}
     episode_stats.update({key:rgb_range_stats(len(target)) for key in schema['cameras']})
     return {'episode_index':index,'tasks':[task['name']],'length':len(target),'dataset_from_index':offset,'dataset_to_index':offset+len(target),'original_episode_id':ep.name,'source_task_id':meta['task_id'],'features':features,'stats':episode_stats,'validation_errors':errors}
 
 def main() -> None:
-    p=argparse.ArgumentParser();p.add_argument('--input',type=Path,required=True,help='原始 dataset/618data；也兼容辅助预检产生的分组输出');p.add_argument('--output',type=Path,required=True);p.add_argument('--schema',type=Path,default=Path(__file__).parent.parent/'config/618_lerobot_schema.json');p.add_argument('--task-map',type=Path,default=Path(__file__).parent.parent/'config/task_id_map.json');p.add_argument('--workers',type=int,default=3);p.add_argument('--min-duration-s',type=float,default=8.0);a=p.parse_args()
+    started=time.perf_counter()
+    p=argparse.ArgumentParser();p.add_argument('--input',type=Path,required=True,help='原始 dataset/618data；也兼容辅助预检产生的分组输出');p.add_argument('--output',type=Path,required=True);p.add_argument('--schema',type=Path,default=REPO_ROOT/'config/618_lerobot_schema.json');p.add_argument('--task-map',type=Path,default=REPO_ROOT/'config/task_id_map.json');p.add_argument('--fields',type=Path,default=REPO_ROOT/'config/618_field_definitions.json');p.add_argument('--workers',type=int,default=8);p.add_argument('--cuda-workers',type=int,default=4);p.add_argument('--qsv-workers',type=int,default=0);p.add_argument('--min-duration-s',type=float,default=8.0);p.add_argument('--allow-unmapped-empty-task',action='store_true');p.add_argument('--three-cameras-only',action='store_true');a=p.parse_args()
     if a.output.exists(): raise SystemExit(f'输出已存在: {a.output}')
-    schema=read_json(a.schema); mapping=read_json(a.task_map)['tasks']; a.output.mkdir(parents=True)
+    schema=read_json(a.schema); field_definitions=read_json(a.fields); schema.update(field_definitions); mapping=read_json(a.task_map)['tasks'];
+    if a.three_cameras_only:
+        keep={'observation.images.cam_high_rgb','observation.images.cam_left_wrist_rgb','observation.images.cam_right_wrist_rgb'}
+        schema['cameras']={key:value for key,value in schema['cameras'].items() if key in keep}
+        if len(schema['cameras']) != 3: raise ValueError('schema is missing one of the requested three RGB cameras')
+    a.output.mkdir(parents=True)
     raw_layout=any((child/'meta_info.json').is_file() for child in a.input.iterdir() if child.is_dir())
-    raw_groups,rejected=collect_raw_episodes(a.input,mapping,a.min_duration_s) if raw_layout else ({},[])
+    if raw_layout and a.allow_unmapped_empty_task: add_empty_text_task_mappings(a.input,mapping)
+    raw_groups,rejected=collect_raw_episodes(a.input,mapping,a.min_duration_s,require_fisheyes=not a.three_cameras_only) if raw_layout else ({},[])
     if raw_layout:
         with (a.output/'conversion_rejected.csv').open('w',newline='',encoding='utf8') as file:
             csv.writer(file).writerows([['episode_uuid','task_id','rejection'],*rejected])
+    plans=[]; prepare_jobs=[]; h265_jobs=[]; jpg_jobs=[]
     for tid,spec in sorted(mapping.items(),key=lambda x:x[1]['order']):
         source=a.input/spec['directory']; eps=raw_groups[spec['directory']] if raw_layout else (sorted(x for x in source.iterdir() if x.is_dir()) if source.exists() else [])
         root=a.output/spec['directory']; (root/'meta').mkdir(parents=True)
-        lengths=[len(timestamps(ep/'camera/head_color/head_color.txt')) for ep in eps]
+        targets=[timestamps(ep/'camera/head_color/head_color.txt') for ep in eps]
+        lengths=[len(target) for target in targets]
         offsets=np.cumsum([0,*lengths[:-1]]).tolist()
         jobs=[(ep,i,offset,root,schema,spec) for i,(ep,offset) in enumerate(zip(eps,offsets))]
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1,a.workers)) as pool: result=list(pool.map(convert_episode,jobs))
+        plans.append({'spec':spec,'root':root,'lengths':lengths,'start':len(prepare_jobs),'count':len(jobs)})
+        prepare_jobs.extend(jobs)
+        for index,(ep,target) in enumerate(zip(eps,targets)):
+            for camera,camera_spec in schema['cameras'].items():
+                job=(ep,index,root,camera,camera_spec,target,int(schema['fps']))
+                if camera_spec['kind']=='h265_timestamp_aligned': h265_jobs.append(job)
+                elif camera_spec['kind']=='jpg_timestamp_aligned': jpg_jobs.append(job)
+                else: raise ValueError(f'unknown camera kind: {camera_spec["kind"]}')
+    prepare_workers=max(1,min(a.workers,len(prepare_jobs) or 1))
+    prepare_lanes=[ProcessLane('prepare',prepare_workers,None)]
+    all_results=run_routed_process_jobs(prepare_episode,prepare_jobs,prepare_lanes)
+    if a.workers==1:
+        h265_lanes=video_process_lanes(1,min(a.cuda_workers,1),0 if a.cuda_workers else min(a.qsv_workers,1))
+        h265_results=run_routed_process_jobs(convert_camera,h265_jobs,h265_lanes)
+        jpg_results=run_routed_process_jobs(convert_camera,jpg_jobs,[ProcessLane('jpg_cpu',1,('cpu','qsv','cuda'))])
+    else:
+        h265_workers=max(1,min(a.workers-1,a.cuda_workers+a.qsv_workers if a.cuda_workers+a.qsv_workers else a.workers-1))
+        jpg_workers=max(1,a.workers-h265_workers)
+        h265_lanes=video_process_lanes(h265_workers,min(a.cuda_workers,h265_workers),min(a.qsv_workers,max(0,h265_workers-min(a.cuda_workers,h265_workers))))
+        jpg_lanes=[ProcessLane('jpg_cpu',jpg_workers,('cpu','qsv','cuda'))]
+        h265_results,jpg_results=run_process_job_groups([
+            (convert_camera,h265_jobs,h265_lanes),
+            (convert_camera,jpg_jobs,jpg_lanes),
+        ])
+    print('camera_process_lanes',[(lane.name,lane.workers) for lane in h265_lanes],('jpg_cpu',1 if a.workers==1 else jpg_workers),flush=True)
+    camera_errors={}
+    for camera_result in [*h265_results,*jpg_results]:
+        if camera_result['error']:
+            key=(camera_result['root'],camera_result['episode_index'])
+            camera_errors.setdefault(key,[]).append(camera_result['error'])
+    for plan in plans:
+        spec=plan['spec']; root=plan['root']; lengths=plan['lengths']; start=plan['start']
+        result=all_results[start:start+plan['count']]
+        for episode_result in result:
+            key=(str(root),episode_result['episode_index'])
+            validation=validate_episode_output(root,episode_result['episode_index'],episode_result['length'],list(schema['cameras']))
+            episode_result['validation_errors']=[*camera_errors.get(key,[]),*validation]
         features={'timestamp':{'dtype':'float32','shape':[1],'names':None},'frame_index':{'dtype':'int64','shape':[1],'names':None},'episode_index':{'dtype':'int64','shape':[1],'names':None},'index':{'dtype':'int64','shape':[1],'names':None},'task_index':{'dtype':'int64','shape':[1],'names':None}}
         if result: features.update(result[0]['features'])
         info={'codebase_version':'v2.1','robot_type':'A2D','fps':schema['fps'],'total_episodes':len(result),'total_frames':sum(lengths),'total_tasks':1,'total_videos':len(schema['cameras'])*len(result),'total_chunks':1,'chunks_size':1000,'splits':{'train':f'0:{len(result)}'},'data_path':'data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet','video_path':'videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4','features':features}
@@ -211,4 +303,5 @@ def main() -> None:
         with (root/'conversion_validation.csv').open('w',newline='',encoding='utf8') as file:
             csv.writer(file).writerows([['episode_index','original_episode_id','frames','validation'],*[[x['episode_index'],x['original_episode_id'],x['length'],';'.join(x['validation_errors']) or 'ok'] for x in result]])
         print(spec['directory'],len(result),'episodes')
+    print(f'elapsed_seconds={time.perf_counter()-started:.3f}', flush=True)
 if __name__=='__main__': main()

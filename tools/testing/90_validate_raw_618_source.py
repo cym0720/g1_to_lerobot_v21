@@ -12,6 +12,8 @@ import json
 import shutil
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 def load_map(path: Path) -> dict[str, dict]:
     data = json.loads(path.read_text(encoding="utf8"))
@@ -68,7 +70,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="按 task_id 分组 618 原始 episode，并隔离缺陷数据。")
     parser.add_argument("--input", type=Path, required=True, help="dataset/618data")
     parser.add_argument("--output", type=Path, required=True, help="复制/移动模式的分组根目录；dry-run 时仅作为报告默认位置")
-    parser.add_argument("--task-map", type=Path, default=Path(__file__).parent.parent / "config" / "task_id_map.json")
+    parser.add_argument("--task-map", type=Path, default=REPO_ROOT / "config" / "task_id_map.json")
     parser.add_argument("--min-duration-s", type=float, default=8.0, help="头部 RGB 时间跨度少于该秒数的轨迹直接归入 00_defective")
     parser.add_argument("--mode", choices=("copy", "move"), default="copy")
     parser.add_argument("--dry-run", action="store_true")

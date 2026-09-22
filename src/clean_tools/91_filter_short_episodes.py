@@ -2,7 +2,12 @@
 from __future__ import annotations
 import argparse, csv, shutil
 from pathlib import Path
-from src.clean_tools.common_lerobot import (
+import sys
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+from packages.lerobot_v21 import (
     tasks,
     episodes,
     copy_dataset_skeleton,

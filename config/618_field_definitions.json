@@ -1,0 +1,28 @@
+{
+  "description": "618data 到 LeRobot v2.1 的 state/action 字段定义。字段排列由 canonical.sources 明确规定，修改前必须确认原始 H5 语义。",
+  "state_features": {
+    "observation.state.joint_position": {"source": "state/joint/position", "shape": [14], "meaning": "left arm 7 followed by right arm 7"},
+    "observation.state.joint_velocity": {"source": "state/joint/velocity", "shape": [14]},
+    "observation.state.left_effector_position": {"source": "state/left_effector/position", "shape": [1]},
+    "observation.state.right_effector_position": {"source": "state/right_effector/position", "shape": [1]},
+    "observation.state.head_position": {"source": "state/head/position", "shape": [2]},
+    "observation.state.waist_position": {"source": "state/waist/position", "shape": [2]},
+    "observation.state.robot_position": {"source": "state/robot/position", "shape": [3]},
+    "observation.state.robot_orientation": {"source": "state/robot/orientation", "shape": [4]}
+  },
+  "state_canonical": {
+    "output": "observation.state",
+    "sources": ["observation.state.joint_position", "observation.state.joint_velocity", "observation.state.left_effector_position", "observation.state.right_effector_position", "observation.state.head_position", "observation.state.waist_position", "observation.state.robot_position", "observation.state.robot_orientation"]
+  },
+  "action_features": {
+    "action.joint_position": {"source": "action/joint/position", "shape": [14]},
+    "action.joint_velocity": {"source": "action/joint/velocity", "shape": [14]},
+    "action.left_effector_position": {"source": "action/left_effector/position", "shape": [1]},
+    "action.right_effector_position": {"source": "action/right_effector/position", "shape": [1]},
+    "action.robot_velocity": {"source": "action/robot/velocity", "shape": [2]}
+  },
+  "action_canonical": {
+    "output": "action",
+    "sources": ["action.joint_position", "action.joint_velocity", "action.left_effector_position", "action.right_effector_position", "action.robot_velocity"]
+  }
+}

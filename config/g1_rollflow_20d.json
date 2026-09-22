@@ -1,0 +1,23 @@
+{
+  "description": "RollFlow G1 canonical 20D state/action overlay for 618data. All values are absolute joint/gripper targets; no EEF or delta actions.",
+  "dimension": 20,
+  "state_sources": [
+    "observation.state.joint_position",
+    "observation.state.waist_position",
+    "observation.state.head_position",
+    "observation.state.left_effector_position",
+    "observation.state.right_effector_position"
+  ],
+  "action_sources": [
+    "action.joint_position",
+    "observation.state.waist_position",
+    "observation.state.head_position",
+    "action.left_effector_position",
+    "action.right_effector_position"
+  ],
+  "names": [
+    "left_arm_joint_1", "left_arm_joint_2", "left_arm_joint_3", "left_arm_joint_4", "left_arm_joint_5", "left_arm_joint_6", "left_arm_joint_7",
+    "right_arm_joint_1", "right_arm_joint_2", "right_arm_joint_3", "right_arm_joint_4", "right_arm_joint_5", "right_arm_joint_6", "right_arm_joint_7",
+    "waist_yaw", "waist_pitch", "head_yaw", "head_pitch", "left_gripper", "right_gripper"
+  ]
+}

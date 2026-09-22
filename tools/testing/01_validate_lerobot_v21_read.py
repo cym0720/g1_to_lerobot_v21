@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import av
@@ -51,6 +51,10 @@ def check_episode(root: Path, episode: dict, cameras: tuple[str, ...]) -> dict:
     }
 
 
+def check_episode_job(job: tuple[Path, dict, tuple[str, ...]]) -> dict:
+    return check_episode(*job)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Read-only full LeRobot v2.1 integrity test.")
     parser.add_argument("--input", type=Path, required=True)
@@ -69,8 +73,9 @@ def main() -> None:
         if any(ep.get("tasks") != [task_rows[0]["task"]] for ep in episodes):
             raise ValueError(f"{root}: episode task map mismatch")
         cameras = tuple(key for key, value in info["features"].items() if value["dtype"] == "video")
-        with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
-            checked = list(pool.map(lambda ep: check_episode(root, ep, cameras), episodes))
+        jobs = [(root, episode, cameras) for episode in episodes]
+        with ProcessPoolExecutor(max_workers=max(1, args.workers)) as pool:
+            checked = list(pool.map(check_episode_job, jobs))
         for item in checked:
             item["task_directory"] = root.name
         rows.extend(checked)
