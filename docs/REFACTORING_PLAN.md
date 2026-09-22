@@ -39,7 +39,8 @@ EVA qpos20 converted baseline
 
 ## 当前实现顺序
 
-1. 已建立 EVA contract、通用 inclusive range-plan、夹爪候选段与 PCA/球证据融合函数，并配单元测试。
-2. 下一步迁移 converter：按命名原始字段组装 qpos20，显式声明输入夹爪语义，写入新目录。
-3. 再实现通用 splitter，并从真实乒乓球源代码/标注迁移球检测 adapter；不从编译缓存猜阈值。
-4. 每个改写数据的阶段必须完成完整读取、帧数/metadata 一致性和 ACT loss gate。
+1. 已建立 EVA contract、通用 inclusive range-plan、夹爪候选段与 PCA/球证据融合函数。
+2. 已实现通用 splitter：它先完整只读预检输入 Parquet 和视频帧数，再在新目录切分、重编号并重建 metadata/stats。
+3. 下一步迁移 converter：按命名原始字段组装 qpos20，显式声明输入夹爪语义，写入新的 `dataset/converted/<id>`；缺失动作字段不得静默补零。
+4. 再从真实乒乓球源代码/标注迁移球检测 adapter；不从编译缓存猜阈值。
+5. 每个改写数据的阶段必须完成完整读取、帧数/metadata 一致性和 ACT loss gate。

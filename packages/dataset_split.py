@@ -111,9 +111,42 @@ def _prepare_metadata(source: Path, destination: Path) -> dict[str, Any]:
     return json.loads((destination / "meta/info.json").read_text(encoding="utf8"))
 
 
+def preflight_split(input_root: Path, plan: dict[str, Any]) -> dict[str, Any]:
+    """Read-only gate: prove planned source slices are readable before writing."""
+    validate_plan(plan)
+    source_by_name = {root.name: root for root in task_roots(input_root)}
+    report: dict[str, Any] = {"schema": "split-preflight/v1", "tasks": []}
+    for entry in plan["episodes"]:
+        task = entry["task"]
+        root = source_by_name.get(task)
+        if root is None:
+            raise ValueError(f"range plan references missing task directory {task!r}")
+        episode = int(entry["episode_index"])
+        source_rows = {int(row["episode_index"]): row for row in episodes(root)}
+        if episode not in source_rows:
+            raise ValueError(f"{task}: range plan references missing episode {episode}")
+        expected = int(entry["source_frames"])
+        if int(source_rows[episode]["length"]) != expected:
+            raise ValueError(f"{task} ep={episode}: plan frame count differs from metadata")
+        table = pq.read_table(episode_parquet(root, episode))
+        if table.num_rows != expected:
+            raise ValueError(f"{task} ep={episode}: source parquet rows mismatch")
+        info = json.loads((root / "meta/info.json").read_text(encoding="utf8"))
+        cameras = tuple(name for name, value in info["features"].items() if value.get("dtype") == "video")
+        for camera in cameras:
+            video = _source_video(root, episode, camera)
+            if video_frame_count(video) != expected:
+                raise ValueError(f"{task} ep={episode}: source video frame count mismatch for {camera}")
+        report["tasks"].append({"task_directory": task, "episode_index": episode, "source_frames": expected,
+                                "kept_frames": sum(end - start + 1 for start, end in entry["keep_ranges"])})
+    if not report["tasks"]:
+        raise ValueError("range plan has no selected episodes")
+    return report
+
+
 def split_dataset(input_root: Path, output_root: Path, plan: dict[str, Any], workers: int = 4) -> dict[str, Any]:
     """Apply a final range plan without mutating the input dataset."""
-    validate_plan(plan)
+    preflight_split(input_root, plan)
     if output_root.exists():
         raise FileExistsError(f"refusing to overwrite output: {output_root}")
     output_root.mkdir(parents=True)
@@ -147,6 +180,8 @@ def split_dataset(input_root: Path, output_root: Path, plan: dict[str, Any], wor
                 jobs.append((source, destination, source_episode, start, end, output_episode, global_offset, chunk_size, fps, numeric, cameras))
                 output_episode += 1
                 global_offset += length
+        if not jobs:
+            raise ValueError(f"{source.name}: selected plan entries contain no frames")
         results: list[dict[str, Any]] = []
         with ProcessPoolExecutor(max_workers=max(1, min(workers, len(jobs) or 1))) as pool:
             futures = [pool.submit(_split_job, job) for job in jobs]

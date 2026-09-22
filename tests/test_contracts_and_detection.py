@@ -16,7 +16,7 @@ from packages.eva_qpos import assemble_g1_qpos, to_closed_fraction
 from packages.range_plan import make_plan
 from packages.lerobot_v21 import episode_parquet
 from packages.ball_events import BallEventsError, load_ball_events
-from packages.dataset_split import split_dataset, validate_split_task
+from packages.dataset_split import preflight_split, split_dataset, validate_split_task
 from packages.ffmpeg_io import video_frame_count
 
 
@@ -172,6 +172,8 @@ class ContractAndDetectionTests(unittest.TestCase):
                 episodes=[{"task": "task_a", "episode_index": 0, "source_frames": 6, "keep_ranges": [[1, 3], [5, 5]]}],
             )
 
+            preflight = preflight_split(parent, plan)
+            self.assertEqual(preflight["tasks"][0]["kept_frames"], 4)
             report = split_dataset(parent, output, plan, workers=1)
             destination = output / "task_a"
             self.assertEqual(report["tasks"], [{"task_directory": "task_a", "episodes": 2, "frames": 4}])

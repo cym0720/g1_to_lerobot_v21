@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from packages.dataset_split import split_dataset
+from packages.dataset_split import preflight_split, split_dataset
 from packages.range_plan import load_plan
 
 
@@ -25,7 +25,8 @@ def main() -> None:
     args = parser.parse_args()
     plan = load_plan(args.plan)
     if args.dry_run:
-        print(json.dumps({"input": str(args.input), "output": str(args.output), "plan": plan}, ensure_ascii=False, indent=2))
+        report = preflight_split(args.input, plan)
+        print(json.dumps({"input": str(args.input), "output": str(args.output), "preflight": report}, ensure_ascii=False, indent=2))
         return
     report = split_dataset(args.input, args.output, plan, args.workers)
     if args.debug:
