@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 
@@ -9,6 +10,7 @@ from packages.contracts import load_qpos_contract
 from packages.detection import fuse_pingpong_hits, gripper_candidate_ranges, pca_motion_scores
 from packages.eva_qpos import assemble_g1_qpos, to_closed_fraction
 from packages.range_plan import make_plan
+from packages.lerobot_v21 import episode_parquet
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -89,6 +91,16 @@ class ContractAndDetectionTests(unittest.TestCase):
             assembly.action_fallbacks,
             ("observation.state.head_position", "observation.state.waist_position"),
         )
+
+    def test_episode_parquet_uses_declared_chunk_size(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "meta").mkdir()
+            (root / "meta/info.json").write_text('{"chunks_size": 2}', encoding="utf8")
+            expected = root / "data/chunk-001/episode_000003.parquet"
+            expected.parent.mkdir(parents=True)
+            expected.touch()
+            self.assertEqual(episode_parquet(root, 3), expected)
 
 
 if __name__ == "__main__":
