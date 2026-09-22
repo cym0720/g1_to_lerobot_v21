@@ -1,12 +1,16 @@
 # 618data → LeRobot v2.1 清洗流水线
 
-本仓库将原始 `dataset/618data` 转为按任务拆分的 LeRobot v2.1 数据集，并在转换结果上完成时长校验、全臂静止帧裁剪、起始 action 平滑、离群轨迹审查和最终统计重算。原始数据与最终输出均不纳入 Git。
+本仓库将原始 G1 记录转换为 EVA replay 的 LeRobot v2.1 qpos20 数据契约。原始输入放在 `dataset/raw/`，不可变转换基线放在 `dataset/converted/`；日常清洗链路只维护 `output/current/data` 一份工作数据。原始数据与最终输出均不纳入 Git。
 
 ## 目录
 
-- `config/`：任务 ID 映射、相机和数据字段配置。
-- `src/clean_tools/`：任务级清洗步骤与主流水线编排。`n- `packages/`：可复用的 LeRobot v2.1 路径工具、action 低通滤波、FFmpeg 编解码/探测基础设施。
-- `tools/conversion/`：数据格式转换与可选 v2.1→v3.0 导出工具。
+- `config/contracts/`：版本化的输出数据契约；新 G1 输出使用 EVA qpos20。
+- `config/sources/`：按机器人定义原始字段映射；不按数据集日期分目录。
+- `config/detectors/`：与机器人无关的检测器参数。
+- `src/clean_tools/`：普通数据的可选清洗步骤与主流水线编排。
+- `packages/`：可复用的契约、范围计划、检测、LeRobot 路径和 FFmpeg 基础设施。
+- `tools/`：薄 CLI；`tools/split_by_ranges.py` 只消费通用区间计划。
+- `examples/pingpong/`：乒乓球专项的两步检测示例。
 - `tools/testing/`：原始数据检查、LeRobot 全量读取与 ACT smoke test。
 - `dataset/`：原始数据（Git 忽略）。
 - `output/`：转换、清洗、报告和训练产物（Git 忽略）。
@@ -17,17 +21,21 @@
 # 从仓库根目录运行；默认使用 8 个 worker
 powershell -ExecutionPolicy Bypass -File src/clean_tools/run_618_pipeline.ps1 `
   -InputRoot dataset/618data `
-  -OutputRoot output/618_cleaning_trial `
+  -ConvertedRoot dataset/converted/618_qpos20 `
+  -OutputRoot output/current `
+  -GripperConvention closed_0_1 `
+  -AllowStateActionFallback `
   -Workers 8
 ```
 
 主流程顺序如下：
 
-1. `tools/conversion/00_convert_618_to_lerobot.py`：原始 618data 转为每任务一个 LeRobot v2.1 原始数据集。
-2. `tools/testing/01_validate_lerobot_v21_read.py`：完整读取全部 Parquet 与视频，输出只读校验报告。
-3. `src/clean_tools/02_trim_arm_static_frames.py`：用全部 14 个 arm joint 判断首尾静止帧，并保留两端各 5 帧空白帧。
-4. `src/clean_tools/03_smooth_startup_actions.py`：对 action 采用因果低通：保留静止前 5 帧 + 起始运动 0.5 秒 + 后 5 帧交叉淡入，不改变 state、视频、时间戳。
-5. `src/clean_tools/05_recompute_metadata_stats.py`：从最终数据重算 LeRobot v2.1 metadata 与统计信息。
+1. `tools/conversion/00_convert_618_to_lerobot.py`：写入 `observations.state.qpos` 和 `action.qpos`，各为 float32[20]；夹爪语义必须显式声明。
+2. 可选 `02_trim_arm_static_frames.py`：使用 qpos 中 14 个手臂关节裁剪首尾静止帧。
+3. 可选 `03_smooth_startup_actions.py`：只平滑 `action.qpos`；默认关闭。
+4. `05_recompute_metadata_stats.py`、完整读取验证和 ACT loss smoke：是每次物化数据后的必经门禁。
+
+乒乓球数据只在 common tail 之前增加两步：先由 gripper 产生候选区间，再由球检测加 PCA 击打证据产生最终 `range-plan/v1`。随后 `tools/split_by_ranges.py` 完成一次通用裁剪；统计和校验不属于乒乓球的第三个检测步骤。
 
 `src/clean_tools/04_review_outliers.py` 用于单独生成离群轨迹审查视频；确认删除清单后才会执行选择性删除。
 

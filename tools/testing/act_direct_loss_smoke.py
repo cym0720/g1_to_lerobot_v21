@@ -20,9 +20,12 @@ def main() -> None:
     args = parser.parse_args()
     if args.output.exists():
         raise SystemExit(f"refusing to overwrite: {args.output}")
-    table = pq.read_table(args.parquet, columns=["observation.state", "action"])
-    states = np.asarray(table["observation.state"].to_pylist(), dtype=np.float32)
-    actions = np.asarray(table["action"].to_pylist(), dtype=np.float32)
+    # EVA keeps qpos names on disk. LeRobot 0.3.3 ACT internally still looks
+    # up literal `observation.state` and `action`, so this gate adapts only
+    # its in-memory batch rather than contaminating the stored contract.
+    table = pq.read_table(args.parquet, columns=["observations.state.qpos", "action.qpos"])
+    states = np.asarray(table["observations.state.qpos"].to_pylist(), dtype=np.float32)
+    actions = np.asarray(table["action.qpos"].to_pylist(), dtype=np.float32)
     if states.ndim != 2 or actions.ndim != 2:
         raise ValueError(f"expected rank-2 state/action, got {states.shape}/{actions.shape}")
     chunk = min(8, len(actions))

@@ -18,6 +18,7 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from packages.ffmpeg_io import rgb_video_stats
+from packages.lerobot_v21 import episode_parquet, task_roots, video_files
 
 
 def jsonl(path: Path) -> list[dict]:
@@ -68,12 +69,14 @@ def combine(parts: list[dict]) -> dict:
 
 
 def episode_stats(root: Path, episode: dict, numeric: list[str], cameras: list[str], compute_rgb_stats: bool = False) -> tuple[int,dict]:
-    index=int(episode['episode_index']); table=pq.read_table(root/'data/chunk-000'/f'episode_{index:06d}.parquet')
+    index=int(episode['episode_index']); table=pq.read_table(episode_parquet(root,index))
     stats={}
     for key in numeric:
         stats[key]=array_stats(np.asarray(table[key].to_pylist()))
     for camera in cameras:
-        stats[camera]=video_stats(root/'videos/chunk-000'/camera/f'episode_{index:06d}.mp4', compute_rgb_stats)
+        paths=[path for path in video_files(root,index) if path.parent.name==camera]
+        if len(paths)!=1: raise ValueError(f'{root.name} ep={index}: expected one video for {camera}')
+        stats[camera]=video_stats(paths[0], compute_rgb_stats)
     return index,stats
 
 
@@ -90,7 +93,7 @@ def main() -> None:
     parser.add_argument('--tasks',nargs='*',help='仅重算指定任务目录，例如 02_task_05 03_task_06')
     args=parser.parse_args()
     selected=set(args.tasks or [])
-    roots=sorted(p for p in args.input.iterdir() if (p/'meta/info.json').is_file() and (not selected or p.name in selected))
+    roots=[root for root in task_roots(args.input) if not selected or root.name in selected]
     missing=selected-{p.name for p in roots}
     if missing: raise ValueError(f'unknown task directories: {sorted(missing)}')
     for root in roots:

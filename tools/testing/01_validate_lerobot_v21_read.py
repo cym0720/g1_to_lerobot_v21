@@ -10,6 +10,8 @@ from pathlib import Path
 import av
 import pyarrow.parquet as pq
 
+from packages.lerobot_v21 import episode_parquet, task_roots, video_files
+
 
 def read_jsonl(path: Path) -> list[dict]:
     return [
@@ -26,7 +28,7 @@ def decode_count(path: Path) -> int:
 def check_episode(root: Path, episode: dict, cameras: tuple[str, ...]) -> dict:
     index = int(episode["episode_index"])
     expected = int(episode["length"])
-    parquet = root / "data/chunk-000" / f"episode_{index:06d}.parquet"
+    parquet = episode_parquet(root, index)
     table = pq.read_table(parquet)  # Reads every column and row, not metadata only.
     errors = []
     if table.num_rows != expected:
@@ -39,7 +41,11 @@ def check_episode(root: Path, episode: dict, cameras: tuple[str, ...]) -> dict:
     if frame_index != list(range(expected)):
         errors.append("frame_index_not_contiguous")
     for camera in cameras:
-        video = root / "videos/chunk-000" / camera / f"episode_{index:06d}.mp4"
+        videos = [path for path in video_files(root, index) if path.parent.name == camera]
+        if len(videos) != 1:
+            errors.append(f"{camera}_missing_or_ambiguous")
+            continue
+        video = videos[0]
         frames = decode_count(video)  # Fully decodes every frame through PyAV.
         if frames != expected:
             errors.append(f"{camera}_frames={frames},expected={expected}")
@@ -62,7 +68,7 @@ def main() -> None:
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     rows = []
-    for root in sorted(p for p in args.input.iterdir() if (p / "meta/info.json").is_file()):
+    for root in task_roots(args.input):
         info = json.loads((root / "meta/info.json").read_text(encoding="utf8"))
         if info.get("codebase_version") != "v2.1":
             raise ValueError(f"{root}: not v2.1")

@@ -50,7 +50,7 @@ def trim_episode(job):
     dst, episode, idx, threshold, padding, min_motion_run, fps = job
     episode_index = int(episode["episode_index"])
     current = table(dst, episode_index)
-    q = np.asarray(current["observation.state.joint_position"].to_pylist(), dtype=np.float32)
+    q = np.asarray(current["observations.state.qpos"].to_pylist(), dtype=np.float32)
     moving = np.r_[False, np.max(np.abs(np.diff(q[:, idx], axis=0)), axis=1) > threshold]
     valid = np.convolve(moving.astype(int), np.ones(min_motion_run, dtype=int), "same") >= min_motion_run
     if not valid.any():
@@ -74,7 +74,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--input", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
-    p.add_argument("--arm-joint-indices", required=True)
+    p.add_argument("--arm-joint-indices", default="0,1,2,3,4,5,6,8,9,10,11,12,13,14")
     p.add_argument("--threshold", type=float, default=1e-3)
     p.add_argument("--padding-frames", type=int, default=5)
     p.add_argument("--min-motion-run", type=int, default=3)

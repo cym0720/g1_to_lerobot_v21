@@ -35,12 +35,6 @@ def smooth_episode(job: tuple[Path, dict, list[str], float, float, int, int]) ->
         smooth, window = smooth_startup_action(raw, fps, duration, cutoff, pre_roll, post_roll)
         table = table.set_column(index, key, arrow_array(smooth, table.schema.field(index)))
         changed.append(key)
-    if "action" in table.column_names:
-        canonical = np.asarray(table["action"].to_pylist(), dtype=np.float32)
-        canonical, _ = smooth_startup_action(canonical, fps, duration, cutoff, pre_roll, post_roll)
-        index = table.schema.get_field_index("action")
-        table = table.set_column(index, "action", arrow_array(canonical, table.schema.field(index)))
-        changed.append("action")
     pq.write_table(table, path, compression="snappy")
     return [root.name, episode["episode_index"], window["pre_roll_frames"], window["motion_frames"], window["post_roll_frames"], window["window_frames"], ";".join(changed)]
 
@@ -59,7 +53,7 @@ def main() -> None:
     report = []
     for root in tasks(args.input):
         info = json.loads((root / "meta" / "info.json").read_text(encoding="utf8"))
-        named = [key for key in info["features"] if key.startswith("action.") and key != "action"]
+        named = ["action.qpos"] if "action.qpos" in info["features"] else []
         jobs = [(root, episode, named, float(info["fps"]), args.motion_duration_s, args.cutoff_hz, args.pre_roll_frames, args.post_roll_frames) for episode in episodes(root)]
         with ProcessPoolExecutor(max_workers=max(1, args.workers)) as pool:
             report.extend(pool.map(smooth_episode, jobs))
