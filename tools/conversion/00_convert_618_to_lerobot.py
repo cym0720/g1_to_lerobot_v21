@@ -5,10 +5,6 @@ import argparse
 import sys
 import csv
 import json
-import os
-import shutil
-import subprocess
-import tempfile
 import time
 from pathlib import Path
 
@@ -38,6 +34,7 @@ from packages.eva_qpos import assemble_g1_qpos
 from packages.raw_preflight import (
     add_empty_text_task_mappings,
     collect_raw_episodes,
+    h5_stream_present,
     read_json,
     timestamps,
 )
@@ -56,26 +53,11 @@ def nearest(values: np.ndarray, target: np.ndarray) -> np.ndarray:
     return np.where(np.abs(values[right] - target) < np.abs(values[left] - target), right, left)
 
 
-def h5_series(h5: h5py.File, data_key: str, target: np.ndarray, shape: list[int]) -> np.ndarray:
-    base = data_key.rsplit("/", 1)[0]
-    ts_key = base + "/timestamp"
-    if data_key not in h5 or ts_key not in h5:
-        return np.zeros((len(target), *shape), np.float32)
-    values = np.asarray(h5[data_key])
-    times = np.asarray(h5[ts_key])
-    if values.ndim == 0 or len(values) == 0 or len(times) == 0:
-        return np.zeros((len(target), *shape), np.float32)
-    n = min(len(values), len(times))
-    values = values[:n]
-    times = times[:n]
-    return np.asarray(values[nearest(times, target)], dtype=np.float32)
-
-
 def h5_series_required(
     h5: h5py.File, data_key: str, target: np.ndarray, width: int, required: bool = True
 ) -> np.ndarray | None:
     """Read a named G1 component; no fabricated zeros for missing contract fields."""
-    if not _h5_stream_present(h5, data_key):
+    if not h5_stream_present(h5, data_key):
         if required:
             raise ValueError(f"missing or empty required H5 stream: {data_key}")
         return None
@@ -225,28 +207,6 @@ def convert_camera(
         "backend": backend,
         "error": error,
     }
-
-
-def video_frames(path: Path) -> int:
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-count_frames",
-            "-show_entries",
-            "stream=nb_read_frames",
-            "-of",
-            "default=nokey=1:noprint_wrappers=1",
-            str(path),
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return int(result.stdout.strip())
 
 
 def validate_episode_output(root: Path, index: int, expected: int, cameras: list[str]) -> list[str]:

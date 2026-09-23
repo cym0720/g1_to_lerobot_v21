@@ -33,7 +33,8 @@ def timestamps(path: Path) -> np.ndarray:
     )
 
 
-def _h5_stream_present(h5: h5py.File, data_key: str) -> bool:
+def h5_stream_present(h5: h5py.File, data_key: str) -> bool:
+    """Whether a source H5 signal and its timestamp stream are both nonempty."""
     base = data_key.rsplit("/", 1)[0]
     timestamp_key = base + "/timestamp"
     return (
@@ -91,7 +92,7 @@ def source_errors(
                         fallback_allowed = (
                             allow_state_action_fallback and output in STATE_ACTION_FALLBACK_KEYS
                         )
-                        if not _h5_stream_present(h5, data_key) and not fallback_allowed:
+                        if not h5_stream_present(h5, data_key) and not fallback_allowed:
                             errors.append(f"missing_or_empty_{data_key}")
         except (OSError, ValueError) as exc:
             errors.append(f"invalid_raw_joints.h5:{exc}")
