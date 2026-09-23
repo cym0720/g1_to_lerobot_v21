@@ -19,7 +19,8 @@ Python requirements 替代。
 
 ## 普通数据链路
 
-普通数据不需要乒乓球检测。其顺序固定为：原始 HDF5 预检 -> EVA qpos20 转换 -> 可选
+普通数据不需要乒乓球检测。转换输入位于 `dataset/raw/`（具体批次布局见
+[本机数据目录约定](DATA_LAYOUT.md)）。其顺序固定为：原始 HDF5 预检 -> EVA qpos20 转换 -> 可选
 静止帧裁剪 -> 可选起始 action 平滑 -> 统计重算 -> LeRobot 完整读取验证 -> ACT loss smoke。
 
 ```powershell

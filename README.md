@@ -37,7 +37,8 @@ Git 历史和 WSL 的 CUDA 环境；初始化模板和迁移脚本分别位于
 本仓库只保留数据清洗代码，不再把 StarVLA 运行环境或历史部署包放在根目录。
 
 详细的环境、普通/乒乓球运行顺序和完成门禁见 [运行手册](docs/PIPELINE_OPERATIONS.md)；历史
-输出的归档与删除规则见 [输出保留规则](docs/OUTPUT_RETENTION.md)。
+输出的归档与删除规则见 [输出保留规则](docs/OUTPUT_RETENTION.md)；本机原始数据的位置见
+[数据目录约定](docs/DATA_LAYOUT.md)。
 
 ## 主流程
 
