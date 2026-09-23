@@ -1,3 +1,9 @@
+"""契约、乒乓球检测和通用切分的无数据集回归测试。
+
+这些测试只构造微型 HDF5、Parquet 和视频 fixture，因此能在不读取真实录制数据的情况下，
+验证输出 qpos 顺序、区间语义以及切分后元数据和视频的一致性。
+"""
+
 from __future__ import annotations
 
 import unittest
@@ -31,7 +37,10 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 class ContractAndDetectionTests(unittest.TestCase):
+    """保护跨脚本共享的数据契约与不可回退的清洗门禁。"""
+
     def test_eva_g1_contract_has_expected_qpos_layout(self) -> None:
+        """EVA replay 的 G1 state/action 必须保持 20 维固定顺序。"""
         contract = load_qpos_contract(REPO / "config/contracts/eva_replay_g1_qpos20_v1.json")
         self.assertEqual(contract.robot, "g1")
         self.assertEqual(len(contract.qpos_names), 20)
@@ -41,6 +50,7 @@ class ContractAndDetectionTests(unittest.TestCase):
         )
 
     def test_gripper_ranges_are_inclusive_and_filtered(self) -> None:
+        """夹爪候选范围使用闭区间，并丢弃短于阈值的片段。"""
         qpos = np.zeros((12, 20), dtype=np.float32)
         qpos[5:, 7] = 1.0
         ranges, jumps = gripper_candidate_ranges(qpos, (7, 15), 0.5, min_segment_frames=3)
@@ -48,16 +58,19 @@ class ContractAndDetectionTests(unittest.TestCase):
         self.assertEqual(ranges, [[0, 4], [5, 11]])
 
     def test_pingpong_fusion_requires_ball_and_pca_evidence(self) -> None:
+        """乒乓球最终裁剪必须同时有球事件和 PCA 运动证据。"""
         selected, hits = fuse_pingpong_hits([[0, 9], [10, 19]], [4, 14], [5, 40], 2)
         self.assertEqual(selected, [[0, 9]])
         self.assertEqual(hits, [{"ball_frame": 4, "pca_frame": 5}])
 
     def test_pca_scores_match_frame_count(self) -> None:
+        """PCA 分数始终与原始帧数对齐，方便后续融合。"""
         qpos = np.zeros((16, 20), dtype=np.float32)
         qpos[8:, 8] = 4.0
         self.assertEqual(len(pca_motion_scores(qpos, range(8, 15))), 16)
 
     def test_range_plan_normalizes_adjacent_ranges(self) -> None:
+        """相邻的保留范围写入契约前必须归一为一个范围。"""
         plan = make_plan(
             contract="eva-replay-g1-qpos20-v1",
             source_dataset="fixture",
@@ -74,6 +87,7 @@ class ContractAndDetectionTests(unittest.TestCase):
         self.assertEqual(plan["episodes"][0]["keep_ranges"], [[0, 4]])
 
     def test_g1_qpos_uses_contract_order_and_closed_grippers(self) -> None:
+        """原始 0=开、120=闭编码应转换为契约内的 closed fraction。"""
         frames = 2
         columns = {
             "observation.state.joint_position": np.arange(frames * 14, dtype=np.float32).reshape(
