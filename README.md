@@ -23,7 +23,6 @@ powershell -ExecutionPolicy Bypass -File src/clean_tools/run_618_pipeline.ps1 `
   -InputRoot dataset/618data `
   -ConvertedRoot dataset/converted/618_qpos20 `
   -OutputRoot output/current `
-  -GripperConvention closed_0_1 `
   -AllowStateActionFallback `
   -Workers 8
 ```

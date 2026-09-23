@@ -2,7 +2,6 @@ param(
     [string]$InputRoot = "dataset/618data",
     [string]$ConvertedRoot = "dataset/converted/618_qpos20",
     [string]$OutputRoot = "output/current",
-    [Parameter(Mandatory = $true)]
     [ValidateSet("raw_encoder_0_120", "opening_0_1", "closed_0_1")]
     [string]$GripperConvention,
     [switch]$AllowStateActionFallback,
@@ -25,9 +24,9 @@ if (Test-Path $dataRoot) { throw "Output data already exists: $dataRoot" }
 
 $convertArgs = @(
     "tools/conversion/00_convert_618_to_lerobot.py", "--input", $InputRoot,
-    "--output", $ConvertedRoot, "--workers", $Workers, "--min-duration-s", $MinDurationSeconds,
-    "--gripper-convention", $GripperConvention
+    "--output", $ConvertedRoot, "--workers", $Workers, "--min-duration-s", $MinDurationSeconds
 )
+if ($GripperConvention) { $convertArgs += @("--gripper-convention", $GripperConvention) }
 if ($AllowStateActionFallback) { $convertArgs += "--allow-state-action-fallback" }
 & $python @convertArgs
 

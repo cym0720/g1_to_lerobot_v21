@@ -1,45 +1,52 @@
 {
-  "source_id": "g1",
-  "raw_h5_adapter": {
-    "state": {
-      "observation.state.joint_position": "state/joint/position",
-      "observation.state.left_effector_position": "state/left_effector/position",
-      "observation.state.right_effector_position": "state/right_effector/position",
-      "observation.state.head_position": "state/head/position",
-      "observation.state.waist_position": "state/waist/position"
+    "source_id": "g1",
+    "gripper_convention": "raw_encoder_0_120",
+    "gripper_encoding": {
+        "open": 0,
+        "closed": 120,
+        "target_semantic": "closed_fraction",
+        "target_formula": "clip(raw, 0, 120) / 120"
     },
-    "action": {
-      "action.joint_position": "action/joint/position",
-      "action.left_effector_position": "action/left_effector/position",
-      "action.right_effector_position": "action/right_effector/position",
-      "action.head_position": "action/head/position",
-      "action.waist_position": "action/waist/position"
+    "raw_h5_adapter": {
+        "state": {
+            "observation.state.joint_position": "state/joint/position",
+            "observation.state.left_effector_position": "state/left_effector/position",
+            "observation.state.right_effector_position": "state/right_effector/position",
+            "observation.state.head_position": "state/head/position",
+            "observation.state.waist_position": "state/waist/position"
+        },
+        "action": {
+            "action.joint_position": "action/joint/position",
+            "action.left_effector_position": "action/left_effector/position",
+            "action.right_effector_position": "action/right_effector/position",
+            "action.head_position": "action/head/position",
+            "action.waist_position": "action/waist/position"
+        }
+    },
+    "legacy_lerobot_adapter": {
+        "state": {
+            "arms": "observation.state.joint_position",
+            "left_gripper": "observation.state.left_effector_position",
+            "right_gripper": "observation.state.right_effector_position",
+            "head": "observation.state.head_position",
+            "body": "observation.state.waist_position"
+        },
+        "action": {
+            "arms": "action.joint_position",
+            "left_gripper": "action.left_effector_position",
+            "right_gripper": "action.right_effector_position",
+            "head": ["action.head_position", "observation.state.head_position"],
+            "body": ["action.waist_position", "observation.state.waist_position"]
+        },
+        "camera_aliases": {
+            "observation.images.cam_high_rgb": "observation.images.cam_high",
+            "observation.images.cam_left_wrist_rgb": "observation.images.cam_left_wrist",
+            "observation.images.cam_right_wrist_rgb": "observation.images.cam_right_wrist"
+        }
+    },
+    "qpos_order_confirmation": {
+        "arms": "left_arm_7_then_right_arm_7",
+        "head": "head_yaw_then_head_pitch",
+        "body": "lift_then_waist_pitch"
     }
-  },
-  "legacy_lerobot_adapter": {
-    "state": {
-      "arms": "observation.state.joint_position",
-      "left_gripper": "observation.state.left_effector_position",
-      "right_gripper": "observation.state.right_effector_position",
-      "head": "observation.state.head_position",
-      "body": "observation.state.waist_position"
-    },
-    "action": {
-      "arms": "action.joint_position",
-      "left_gripper": "action.left_effector_position",
-      "right_gripper": "action.right_effector_position",
-      "head": ["action.head_position", "observation.state.head_position"],
-      "body": ["action.waist_position", "observation.state.waist_position"]
-    },
-    "camera_aliases": {
-      "observation.images.cam_high_rgb": "observation.images.cam_high",
-      "observation.images.cam_left_wrist_rgb": "observation.images.cam_left_wrist",
-      "observation.images.cam_right_wrist_rgb": "observation.images.cam_right_wrist"
-    }
-  },
-  "qpos_order_confirmation": {
-    "arms": "left_arm_7_then_right_arm_7",
-    "head": "head_yaw_then_head_pitch",
-    "body": "lift_then_waist_pitch"
-  }
 }

@@ -430,7 +430,9 @@ def rgb_range_stats(count: int) -> dict:
     }
 
 
-def prepare_episode(args: tuple[Path, int, int, Path, dict, dict, dict, str, bool]) -> dict:
+def prepare_episode(
+    args: tuple[Path, int, int, Path, dict, dict, dict, str, bool, tuple[str, ...], object]
+) -> dict:
     (
         ep,
         index,
@@ -441,6 +443,8 @@ def prepare_episode(args: tuple[Path, int, int, Path, dict, dict, dict, str, boo
         raw_adapter,
         gripper_convention,
         allow_state_action_fallback,
+        qpos_names,
+        _lane_payload,
     ) = args
     meta = read_json(ep / "meta_info.json")
     target = timestamps(ep / "camera/head_color/head_color.txt")
@@ -470,8 +474,12 @@ def prepare_episode(args: tuple[Path, int, int, Path, dict, dict, dict, str, boo
         columns["observations.state.qpos"] = float_column(state, [20])
         columns["action.qpos"] = float_column(action, [20])
         features = {
-            "observations.state.qpos": {"dtype": "float32", "shape": [20], "names": None},
-            "action.qpos": {"dtype": "float32", "shape": [20], "names": None},
+            "observations.state.qpos": {
+                "dtype": "float32",
+                "shape": [20],
+                "names": list(qpos_names),
+            },
+            "action.qpos": {"dtype": "float32", "shape": [20], "names": list(qpos_names)},
         }
     numeric.update(
         {
@@ -536,7 +544,7 @@ def main() -> None:
     p.add_argument(
         "--gripper-convention",
         choices=("raw_encoder_0_120", "opening_0_1", "closed_0_1"),
-        required=True,
+        help="Override the source-config convention only when converting a different G1 recorder.",
     )
     p.add_argument("--allow-state-action-fallback", action="store_true")
     p.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
@@ -556,6 +564,7 @@ def main() -> None:
     contract = load_qpos_contract(a.contract)
     mapping = read_json(a.task_map)["tasks"]
     raw_adapter = source_config["raw_h5_adapter"]
+    gripper_convention = a.gripper_convention or source_config["gripper_convention"]
     expected_cameras = {
         key
         for key, spec in read_json(a.contract)["required_features"].items()
@@ -628,8 +637,9 @@ def main() -> None:
                 schema,
                 spec,
                 raw_adapter,
-                a.gripper_convention,
+                gripper_convention,
                 a.allow_state_action_fallback,
+                contract.qpos_names,
             )
             for i, (ep, offset) in enumerate(zip(eps, offsets))
         ]
@@ -735,7 +745,7 @@ def main() -> None:
             "features": features,
             "conversion_provenance": {
                 "contract": contract.contract_id,
-                "gripper_convention": a.gripper_convention,
+                "gripper_convention": gripper_convention,
                 "gripper_semantic": "closed_fraction",
                 "allow_state_action_fallback": a.allow_state_action_fallback,
             },

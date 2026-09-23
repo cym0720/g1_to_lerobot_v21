@@ -13,7 +13,7 @@ observation.images.cam_right_wrist
 timestamp                float32[1]
 ```
 
-旧 `state20/action22/opening` 只能作为输入兼容格式。新输出的夹爪是 `closed_fraction`：`0=open`，`1=closed`；旧 opening 输入必须显式转换为 `closed = 1 - opening`。
+旧 `state20/action22/opening` 只能作为输入兼容格式。新输出的夹爪是 `closed_fraction`：`0=open`，`1=closed`；旧 opening 输入必须显式转换为 `closed = 1 - opening`。当前 618 G1 原始编码器已确认 `0=open`、`120=closed`，因此 source 配置采用 `raw_encoder_0_120`，转换公式为 `clip(raw, 0, 120) / 120`。
 
 ## 两条管线
 
@@ -56,4 +56,4 @@ EVA qpos20 converted baseline
 1. 从真实乒乓球球检测代码或人工标注迁移 `ball-events/v1` adapter；不从编译缓存猜阈值。它只负责第二步的球帧事件，不裁剪数据。
 2. 已将旧字段依赖的 overlay、三相机抽取、旧 ACT loader 与 action-filter benchmark 移到 `tools/legacy/`，并记录正式替代关系。新增 legacy 工具不得被主入口引用。
 3. 将转换器里仍然存在的早期兼容参数和重复媒体编码细节进一步下沉到 packages；每次移动后保留 Windows process-pool 测试。
-4. 在用户确认 618 左右夹爪的真实尺度和开闭方向后，执行一份小型真实输出，并通过完整 read/video/ACT gate；在此之前不得批量物化正式数据。
+4. 已用单条真实 618 episode 写入 `dataset/converted/g1_qpos20_encoder_smoke`：466 帧、三路视频，完整 read/video 校验通过，ACT 12-step loss gate 通过。下一步批量物化前仍应保留 `--allow-state-action-fallback` 的 provenance 审计。
