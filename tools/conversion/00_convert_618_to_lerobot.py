@@ -35,144 +35,18 @@ from packages.execution import (
 )
 from packages.contracts import load_qpos_contract
 from packages.eva_qpos import assemble_g1_qpos
+from packages.raw_preflight import (
+    add_empty_text_task_mappings,
+    collect_raw_episodes,
+    read_json,
+    timestamps,
+)
 
 # Throughput tuning defaults. They are implementation policy rather than data
 # semantics, so callers normally should not need to repeat them.
 DEFAULT_WORKERS = 8
 DEFAULT_CUDA_WORKERS = 4
 DEFAULT_QSV_WORKERS = 0
-
-
-def read_json(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf8"))
-
-
-def timestamps(path: Path) -> np.ndarray:
-    return np.asarray(
-        [int(line.split()[0]) for line in path.read_text().splitlines() if line.strip()],
-        dtype=np.int64,
-    )
-
-
-def _h5_stream_present(h5: h5py.File, data_key: str) -> bool:
-    base = data_key.rsplit("/", 1)[0]
-    timestamp_key = base + "/timestamp"
-    return (
-        data_key in h5
-        and timestamp_key in h5
-        and len(h5[data_key]) > 0
-        and len(h5[timestamp_key]) > 0
-    )
-
-
-def source_errors(
-    ep: Path,
-    min_duration_s: float,
-    raw_adapter: dict,
-    allow_state_action_fallback: bool,
-    require_fisheyes: bool = True,
-) -> tuple[dict | None, list[str]]:
-    """Minimal conversion preflight; authoritative dataset validation happens after conversion."""
-    meta_path = ep / "meta_info.json"
-    errors = []
-    if not meta_path.is_file():
-        return None, ["missing_meta_info.json"]
-    try:
-        meta = read_json(meta_path)
-    except (OSError, json.JSONDecodeError) as exc:
-        return None, [f"invalid_meta_info.json:{exc}"]
-    for relative in (
-        "record/raw_joints.h5",
-        "camera/head_color/head_color.h265",
-        "camera/head_color/head_color.txt",
-    ):
-        if not (ep / relative).is_file():
-            errors.append(f"missing_{relative}")
-    for wrist in ("hand_left", "hand_right"):
-        if not list((ep / "camera" / wrist / "color").glob("*.jpg")):
-            errors.append(f"missing_{wrist}_jpg")
-    fisheyes = ("head_center_fisheye", "head_left_fisheye", "head_right_fisheye")
-    if require_fisheyes:
-        for fisheye in fisheyes:
-            for suffix in (".h265", ".txt"):
-                if not (ep / "camera" / fisheye / f"{fisheye}{suffix}").is_file():
-                    errors.append(f"missing_{fisheye}{suffix}")
-    h5_path = ep / "record/raw_joints.h5"
-    if h5_path.is_file():
-        try:
-            with h5py.File(h5_path, "r") as h5:
-                for group in ("state", "action"):
-                    for output, data_key in raw_adapter[group].items():
-                        fallback_allowed = allow_state_action_fallback and output in {
-                            "action.head_position",
-                            "action.waist_position",
-                        }
-                        if not _h5_stream_present(h5, data_key) and not fallback_allowed:
-                            errors.append(f"missing_or_empty_{data_key}")
-        except (OSError, ValueError) as exc:
-            errors.append(f"invalid_raw_joints.h5:{exc}")
-    stamp = ep / "camera/head_color/head_color.txt"
-    if stamp.is_file():
-        try:
-            values = timestamps(stamp)
-            duration = (values[-1] - values[0]) / 1e9 if len(values) >= 2 else 0.0
-            if duration < min_duration_s:
-                errors.append(f"too_short_head_duration_s:{duration:.3f}<{min_duration_s:g}")
-        except (ValueError, OSError) as exc:
-            errors.append(f"invalid_head_timestamps:{exc}")
-    if require_fisheyes:
-        for fisheye in fisheyes:
-            stamp = ep / "camera" / fisheye / f"{fisheye}.txt"
-            if stamp.is_file():
-                try:
-                    if len(timestamps(stamp)) == 0:
-                        errors.append(f"empty_{fisheye}_timestamps")
-                except (ValueError, OSError) as exc:
-                    errors.append(f"invalid_{fisheye}_timestamps:{exc}")
-    return meta, errors
-
-
-def collect_raw_episodes(
-    source: Path,
-    mapping: dict,
-    min_duration_s: float,
-    raw_adapter: dict,
-    allow_state_action_fallback: bool,
-    require_fisheyes: bool = True,
-) -> tuple[dict[str, list[Path]], list[list[str]]]:
-    """Return valid raw episodes grouped by mapped task, plus the rejection audit."""
-    grouped = {spec["directory"]: [] for spec in mapping.values()}
-    rejected = []
-    for ep in sorted(x for x in source.iterdir() if x.is_dir()):
-        meta, errors = source_errors(
-            ep, min_duration_s, raw_adapter, allow_state_action_fallback, require_fisheyes
-        )
-        task_id = "" if meta is None else str(meta.get("task_id", ""))
-        spec = mapping.get(task_id)
-        if spec is None and not errors:
-            errors.append(f"unmapped_task_id:{task_id}")
-        if errors:
-            rejected.append([ep.name, task_id, ";".join(errors)])
-            continue
-        grouped[spec["directory"]].append(ep)
-    return grouped, rejected
-
-
-def add_empty_text_task_mappings(source: Path, mapping: dict) -> None:
-    for episode in source.iterdir():
-        meta_path = episode / "meta_info.json"
-        if not episode.is_dir() or not meta_path.is_file():
-            continue
-        try:
-            task_id = str(read_json(meta_path).get("task_id", ""))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if task_id and task_id not in mapping:
-            mapping[task_id] = {
-                "order": 1000 + int(task_id) if task_id.isdigit() else 9999,
-                "name": "",
-                "directory": f"empty_text_task_{task_id}",
-            }
 
 
 def nearest(values: np.ndarray, target: np.ndarray) -> np.ndarray:

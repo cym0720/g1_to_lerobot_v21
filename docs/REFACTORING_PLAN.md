@@ -59,11 +59,11 @@ EVA qpos20 converted baseline
 - 严格 action 契约：接受 0，拒绝 110；主要原因是每条都缺 `action/head/position` 和 `action/waist/position`。
 - 加 `--allow-state-action-fallback`：接受 86，拒绝 24。剩余拒绝来自缺少 `record/raw_joints.h5`、`meta_info.json` 或 `action/joint/position`，这些不能回退，仍必须排除。
 
-因此批量物化之前必须由数据负责人明确接受“head/waist action 回退”这一语义，并保留每条轨迹的 `conversion_validation.csv` 与 `meta/info.json` provenance；没有该决定时，主入口保持严格拒绝。
+批量物化之前必须由数据负责人明确接受“head/waist action 回退”这一语义，并保留每条轨迹的 `conversion_validation.csv` 与 `meta/info.json` provenance；没有该决定时，主入口保持严格拒绝。当前决定是保留 618 原始数据、暂不批量转换，因此不会创建正式 converted 输出。
 
 ## 剩余迁移 / 淘汰清单
 
-1. 从真实乒乓球球检测代码或人工标注迁移 `ball-events/v1` adapter；不从编译缓存猜阈值。它只负责第二步的球帧事件，不裁剪数据。
+1. 从现有乒乓球球检测代码或人工标注迁移 `ball-events/v1` adapter；输入只需表达“任务、episode、球出现/击打帧号”。它只负责第二步的球帧事件，不裁剪数据；在用户指出现有实现或样例之前，不猜测阈值或新造检测器。
 2. 已将旧字段依赖的 overlay、三相机抽取、旧 ACT loader 与 action-filter benchmark 移到 `tools/legacy/`，并记录正式替代关系。新增 legacy 工具不得被主入口引用。
 3. 将转换器里仍然存在的早期兼容参数和重复媒体编码细节进一步下沉到 packages；每次移动后保留 Windows process-pool 测试。
 4. 已用单条真实 618 episode 写入 `dataset/converted/g1_qpos20_encoder_smoke`：466 帧、三路视频，完整 read/video 校验通过，ACT 12-step loss gate 通过。下一步批量物化前仍应保留 `--allow-state-action-fallback` 的 provenance 审计。

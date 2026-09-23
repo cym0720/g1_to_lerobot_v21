@@ -7,6 +7,7 @@ import json
 import subprocess
 
 import numpy as np
+import h5py
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -23,6 +24,7 @@ from packages.ball_events import (
 )
 from packages.dataset_split import preflight_split, split_dataset, validate_split_task
 from packages.ffmpeg_io import video_frame_count
+from packages.raw_preflight import source_errors
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -122,6 +124,43 @@ class ContractAndDetectionTests(unittest.TestCase):
             assembly.action_fallbacks,
             ("observation.state.head_position", "observation.state.waist_position"),
         )
+
+    def test_raw_preflight_requires_explicit_head_waist_action_fallback(self) -> None:
+        """Only documented missing action streams may use the compatibility path."""
+        source = json.loads((REPO / "config/sources/g1.json").read_text(encoding="utf8"))
+        adapter = source["raw_h5_adapter"]
+        with TemporaryDirectory() as temporary:
+            episode = Path(temporary) / "episode"
+            (episode / "record").mkdir(parents=True)
+            (episode / "camera/head_color").mkdir(parents=True)
+            for wrist in ("hand_left", "hand_right"):
+                wrist_dir = episode / "camera" / wrist / "color"
+                wrist_dir.mkdir(parents=True)
+                (wrist_dir / "frame.jpg").touch()
+            (episode / "meta_info.json").write_text('{"task_id": "4"}', encoding="utf8")
+            (episode / "camera/head_color/head_color.h265").touch()
+            (episode / "camera/head_color/head_color.txt").write_text(
+                "0\n100000000\n", encoding="utf8"
+            )
+            with h5py.File(episode / "record/raw_joints.h5", "w") as h5:
+                for group in ("state", "action"):
+                    for output, key in adapter[group].items():
+                        if output in {"action.head_position", "action.waist_position"}:
+                            continue
+                        h5.create_dataset(key, data=np.zeros((2, 1), dtype=np.float32))
+                        h5.create_dataset(
+                            key.rsplit("/", 1)[0] + "/timestamp",
+                            data=np.array([0, 100000000], dtype=np.int64),
+                        )
+            _, strict_errors = source_errors(
+                episode, 0.0, adapter, allow_state_action_fallback=False, require_fisheyes=False
+            )
+            self.assertIn("missing_or_empty_action/head/position", strict_errors)
+            self.assertIn("missing_or_empty_action/waist/position", strict_errors)
+            _, fallback_errors = source_errors(
+                episode, 0.0, adapter, allow_state_action_fallback=True, require_fisheyes=False
+            )
+            self.assertEqual(fallback_errors, [])
 
     def test_episode_parquet_uses_declared_chunk_size(self) -> None:
         with TemporaryDirectory() as temporary:
