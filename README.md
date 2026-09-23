@@ -23,9 +23,11 @@ powershell -ExecutionPolicy Bypass -File src/clean_tools/run_618_pipeline.ps1 `
   -InputRoot dataset/618data `
   -ConvertedRoot dataset/converted/618_qpos20 `
   -OutputRoot output/current `
-  -AllowStateActionFallback `
   -Workers 8
 ```
+
+上例采用严格 action 契约。仅当已审计并接受“缺失的 head/waist action 使用同帧 state 回退”时，才额外传入
+`-AllowStateActionFallback`；该选择会记录到输出 provenance。当前 618 原始数据按计划保留，不执行这条批量转换命令。
 
 主流程顺序如下：
 
