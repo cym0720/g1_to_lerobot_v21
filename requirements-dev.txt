@@ -1,0 +1,3 @@
+# 兼容 pip 的开发与测试入口。
+# 推荐使用：uv sync --extra dev
+-e .[dev]

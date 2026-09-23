@@ -12,11 +12,15 @@ param(
     [double]$MotionThreshold = 0.001
 )
 
-# Standard G1 path. The immutable conversion baseline is under dataset/converted;
-# output/current/data is the only maintained pipeline dataset. Pingpong inserts its
-# two detector steps plus tools/split_by_ranges.py before this common validation tail.
+# 普通 G1 主路径：不可变转换基线在 dataset/converted，唯一维护的流水线数据在
+# output/current/data。乒乓球仅在此公共校验尾部之前插入两步检测和通用裁剪。
 $ErrorActionPreference = "Stop"
-$python = "python"
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
+$python = Join-Path $repoRoot ".venv/Scripts/python.exe"
+if (-not (Test-Path -LiteralPath $python)) {
+    throw "缺少 uv 管理的环境：$python。请先在仓库根目录执行：uv sync --extra dev"
+}
+Set-Location -LiteralPath $repoRoot
 $dataRoot = Join-Path $OutputRoot "data"
 
 if (Test-Path $ConvertedRoot) { throw "ConvertedRoot already exists: $ConvertedRoot" }

@@ -3,6 +3,7 @@ dataset/
 output/
 sample_dataset.zip
 .venv*/
+*.egg-info/
 __pycache__/
 *.py[cod]
 *.log

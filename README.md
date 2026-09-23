@@ -2,6 +2,21 @@
 
 本仓库将原始 G1 记录转换为 EVA replay 的 LeRobot v2.1 qpos20 数据契约。原始输入放在 `dataset/raw/`，不可变转换基线放在 `dataset/converted/`；日常清洗链路只维护 `output/current/data` 一份工作数据。原始数据与最终输出均不纳入 Git。
 
+## Windows 清洗环境
+
+Windows 清洗代码使用仓库根目录的 `.venv`，由 `uv` 管理；不要再使用已废弃的
+`.venv_lerobot_v21`。首次创建或依赖变更后运行：
+
+```powershell
+uv sync --extra dev
+uv run pytest -q
+```
+
+随后通过 `uv run python <脚本路径>` 运行 Python 工具，或直接执行下方的 PowerShell
+主流程。`ffmpeg` 是系统级依赖，需预先安装并能在 `PATH` 中执行 `ffmpeg -version`。
+`requirements.txt`、`requirements-dev.txt` 仅供必须使用 pip 的场景；版本和锁文件以
+`pyproject.toml`、`uv.lock` 为准。
+
 ## 目录
 
 - `config/contracts/`：版本化的输出数据契约；新 G1 输出使用 EVA qpos20。
