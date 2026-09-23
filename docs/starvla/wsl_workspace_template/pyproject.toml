@@ -1,0 +1,10 @@
+[project]
+name = "starvla-g1-validation"
+version = "0.1.0"
+description = "WSL-native validation workspace for StarVLA G1 ACT"
+requires-python = ">=3.10,<3.11"
+dependencies = []
+
+[tool.uv]
+# 上游 StarVLA 的依赖文件是唯一依赖来源，避免在此重复维护同一份长依赖列表。
+package = false

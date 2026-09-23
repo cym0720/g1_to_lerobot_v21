@@ -15,6 +15,12 @@
 - `dataset/`：原始数据（Git 忽略）。
 - `output/`：转换、清洗、报告和训练产物（Git 忽略）。
 
+StarVLA 训练与验证已移至独立 WSL 工作区
+`/home/cym/Projects_2026/starvla-g1-validation`。该工作区使用 `uv`、独立
+Git 历史和 WSL 的 CUDA 环境；初始化模板和迁移脚本分别位于
+`docs/starvla/wsl_workspace_template/`、`tools/bootstrap_wsl_starvla_workspace.sh`。
+本仓库只保留数据清洗代码，不再把 StarVLA 运行环境或历史部署包放在根目录。
+
 ## 主流程
 
 ```powershell

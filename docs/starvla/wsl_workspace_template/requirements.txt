@@ -1,0 +1,2 @@
+# 除 CUDA PyTorch 外，所有运行依赖只从上游清单继承，避免重复维护。
+-r third_party/starvla/requirements.txt
