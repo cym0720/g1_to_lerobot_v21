@@ -29,7 +29,7 @@ powershell -ExecutionPolicy Bypass -File src/clean_tools/run_618_pipeline.ps1 `
 
 主流程顺序如下：
 
-1. `tools/conversion/00_convert_618_to_lerobot.py`：写入 `observations.state.qpos` 和 `action.qpos`，各为 float32[20]；夹爪语义必须显式声明。
+1. `tools/conversion/00_convert_618_to_lerobot.py`：写入 `observations.state.qpos` 和 `action.qpos`，各为 float32[20]；默认读取 `config/sources/g1.json` 中已审计的录制器夹爪语义，只有切换录制器时才通过 CLI 显式覆盖。
 2. 可选 `02_trim_arm_static_frames.py`：使用 qpos 中 14 个手臂关节裁剪首尾静止帧。
 3. 可选 `03_smooth_startup_actions.py`：只平滑 `action.qpos`；默认关闭。
 4. `05_recompute_metadata_stats.py`、完整读取验证和 ACT loss smoke：是每次物化数据后的必经门禁。

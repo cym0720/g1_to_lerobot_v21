@@ -1,8 +1,7 @@
-"""Read-only validation of raw G1 episode directories.
+"""原始 G1 episode 目录的只读预检。
 
-The converter owns output creation and encoding.  This module deliberately
-owns only source inspection, so another G1 importer can reuse the exact same
-rejection policy without importing converter implementation details.
+转换器负责创建输出和编码；本模块只负责检查源数据。这样其他 G1 导入器也能复用同一套
+拒绝规则，而不需要依赖转换器内部实现。
 """
 
 from __future__ import annotations
@@ -13,20 +12,19 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-# These two action streams are absent in the known 618 recorder.  A caller may
-# explicitly opt in to using the matching state streams; every other action
-# stream remains mandatory.
+# 已知 618 录制器没有这两个 action 流。调用方只有显式选择兼容模式时，才能用同帧
+# state 流代替；所有其他 action 流仍是必填项。
 STATE_ACTION_FALLBACK_KEYS = frozenset({"action.head_position", "action.waist_position"})
 FISHEYE_CAMERAS = ("head_center_fisheye", "head_left_fisheye", "head_right_fisheye")
 
 
 def read_json(path: Path) -> dict:
-    """Load a UTF-8 JSON configuration or episode metadata file."""
+    """读取 UTF-8 JSON 配置或 episode 元信息。"""
     return json.loads(path.read_text(encoding="utf8"))
 
 
 def timestamps(path: Path) -> np.ndarray:
-    """Read nanosecond device timestamps from the first column of a text file."""
+    """读取文本首列中的纳秒设备时间戳。"""
     return np.asarray(
         [int(line.split()[0]) for line in path.read_text().splitlines() if line.strip()],
         dtype=np.int64,
@@ -34,7 +32,7 @@ def timestamps(path: Path) -> np.ndarray:
 
 
 def h5_stream_present(h5: h5py.File, data_key: str) -> bool:
-    """Whether a source H5 signal and its timestamp stream are both nonempty."""
+    """确认源 H5 信号与对应时间戳流都存在且非空。"""
     base = data_key.rsplit("/", 1)[0]
     timestamp_key = base + "/timestamp"
     return (
@@ -52,11 +50,10 @@ def source_errors(
     allow_state_action_fallback: bool,
     require_fisheyes: bool = True,
 ) -> tuple[dict | None, list[str]]:
-    """Return parsed metadata and all defects that make an episode unusable.
+    """返回元信息及所有导致 episode 不能转换的缺陷。
 
-    This is intentionally read-only.  The later full LeRobot validation is
-    still required after conversion because it validates generated Parquet and
-    video artifacts rather than only source prerequisites.
+    本函数严格只读。转换后仍要执行完整 LeRobot 校验：此处只验证源数据前置条件，
+    不验证生成的 Parquet 与视频产物。
     """
     meta_path = episode / "meta_info.json"
     errors: list[str] = []
@@ -126,7 +123,7 @@ def collect_raw_episodes(
     allow_state_action_fallback: bool,
     require_fisheyes: bool = True,
 ) -> tuple[dict[str, list[Path]], list[list[str]]]:
-    """Group valid episodes by mapped task and return every rejection reason."""
+    """按映射任务聚合可用 episode，并返回所有拒绝原因。"""
     grouped = {spec["directory"]: [] for spec in mapping.values()}
     rejected: list[list[str]] = []
     for episode in sorted(item for item in source.iterdir() if item.is_dir()):
@@ -145,7 +142,7 @@ def collect_raw_episodes(
 
 
 def add_empty_text_task_mappings(source: Path, mapping: dict) -> None:
-    """Preserve mapped raw episodes without text only when caller opted in."""
+    """仅在调用方显式允许时，为无文本的已知原始任务保留空任务映射。"""
     for episode in source.iterdir():
         meta_path = episode / "meta_info.json"
         if not episode.is_dir() or not meta_path.is_file():
