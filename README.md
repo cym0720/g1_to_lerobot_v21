@@ -93,5 +93,5 @@ meta/stats.json
 无法判定时会保留原始顺序；转换成功本身不能证明关节语义正确。
 
 - [ ] 低通滤波：基于代表性遥操轨迹确定 action 起始段平滑的截止频率、持续时间和交叉淡入参数，并完成前后动作曲线与 ACT 训练效果对比。
-- [ ] FFmpeg 解码加速：在 `experiment/process-parallel-conversion` 分支中，以 FFmpeg 替代 Python/PyAV 的 H.265 逐帧解码；实现跨任务全局进程池、限制单进程线程数，并以相同输入测试吞吐、输出帧数与 LeRobot v2.1 完整读取一致性。
-- [ ] RGB 通道统计：在 FFmpeg 解码/转码链路中以 `rgb24` 原始帧流传给流式累加器，计算每路相机的 R/G/B `mean`、`std`、`min`、`max` 和像素计数；不缓存整段视频，不影响 LeRobot 视频输出。默认关闭，仅在 `--benchmark` 或显式 `--compute-rgb-stats` 时运行；结果写入 benchmark 报告，验证后再用于最终 `stats.json`。
+- [x] FFmpeg 解码加速（已接入当前分支）：H.265 通过 `packages/ffmpeg_io.py` 进行时间戳对齐、FFmpeg 解码/转码，支持 CUDA → QSV → CPU 回退和输出帧数校验；转换器按所有输入任务统一调度受限进程池，设置解码线程数。后端吞吐测试入口为 `tools/testing/benchmark_raw_video_backends.py`，Windows 进程路由测试已通过。具体硬件上的加速比与完整读取结果以对应运行报告为准。
+- [x] RGB 通道统计（已实现）：`packages/ffmpeg_io.py::rgb_video_stats()` 通过 FFmpeg `rgb24` 分块流式计算归一化 R/G/B 的 `mean`、`std`、`min`、`max`，内部按像素数累加、不缓存整段视频。运行 `src/clean_tools/05_recompute_metadata_stats.py --input <数据集目录> --compute-rgb-stats` 使用 FFmpeg 路径，结果写入 `meta/episodes_stats.jsonl` 和 `meta/stats.json`；不传该参数则使用原 PyAV 统计路径。对比测试入口为 `tools/testing/benchmark_rgb_stats.py`。
