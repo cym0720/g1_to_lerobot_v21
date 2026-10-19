@@ -38,8 +38,10 @@ def h5_stream_present(h5: h5py.File, data_key: str) -> bool:
     return (
         data_key in h5
         and timestamp_key in h5
-        and len(h5[data_key]) > 0
-        and len(h5[timestamp_key]) > 0
+        and h5[data_key].shape is not None
+        and h5[timestamp_key].shape is not None
+        and h5[data_key].size > 0
+        and h5[timestamp_key].size > 0
     )
 
 

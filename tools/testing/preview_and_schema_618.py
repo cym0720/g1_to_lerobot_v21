@@ -9,8 +9,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from PIL import Image
-
 
 def first_jpg(path: Path) -> Path:
     try:
@@ -49,11 +47,8 @@ def main() -> None:
     out = args.output
     out.mkdir(parents=True, exist_ok=True)
     camera = episode / "camera"
-    head_original = out / "head_original_1280x800.png"
-    extract_head_frame(camera / "head_color" / "head_color.h265", head_original, args.fps)
-    with Image.open(head_original) as image:
-        crop = image.crop((0, 40, 1280, 760))
-        crop.save(out / "head_center_crop_1280x720.png")
+    head_full = out / "head_full_1280x800.png"
+    extract_head_frame(camera / "head_color" / "head_color.h265", head_full, args.fps)
     left = first_jpg(camera / "hand_left" / "color")
     right = first_jpg(camera / "hand_right" / "color")
     shutil.copy2(left, out / "left_wrist_original_848x480.jpg")

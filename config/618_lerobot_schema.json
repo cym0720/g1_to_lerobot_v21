@@ -15,18 +15,12 @@
                                                                                  3
                                                                              ],
                                                             "output_shape":  [
-                                                                                 720,
+                                                                                 800,
                                                                                  1280,
                                                                                  3
                                                                              ],
-                                                            "transform":  "center_crop_vertical",
-                                                            "crop":  {
-                                                                         "x":  0,
-                                                                         "y":  40,
-                                                                         "width":  1280,
-                                                                         "height":  720
-                                                                     },
-                                                            "reference":  "对齐 robocoin 头部 RGB 尺度；转换器必须同步更新主点 ppy = 原始 ppy - 40"
+                                                            "transform":  "identity",
+                                                            "reference":  "保留原始头相机 RGB 完整画面；模型输入统一使用 letterbox，不裁剪"
                                                         },
                     "observation.images.cam_left_wrist":  {
                                                                   "source":  "camera/hand_left/color/*.jpg",

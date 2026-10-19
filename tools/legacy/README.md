@@ -6,6 +6,7 @@
 - `conversion/02_extract_g1_three_camera.py`：旧三相机子集/状态拼接流程；qpos20 转换器已直接输出三相机。
 - `testing/run_act_v21_native_smoke.py`、`run_act_v21_loss_smoke.py`、`act_v21_smoke_loader.py`：针对旧字段或旧 v2.1 loader 的 ACT 实验。
 - `testing/benchmark_startup_filter.py`：针对旧 action 列的滤波实验。
+- `deployment/package_for_transfer.py`：旧 StarVLA 部署打包器，依赖已迁出的根目录布局；仅作历史参考。
 
 正式替代关系：
 

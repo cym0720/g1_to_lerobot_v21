@@ -1,0 +1,4 @@
+* text=auto
+
+# Linux deployment scripts must retain Unix line endings after Windows checkout.
+*.sh text eol=lf

@@ -1,4 +1,4 @@
-"""Step 2: fuse ball-events/v1 with right-arm PCA evidence into final crop ranges."""
+"""Step 2: detect the ball, fuse it with right-arm PCA evidence, and plan crops."""
 from __future__ import annotations
 
 import argparse
@@ -19,13 +19,52 @@ from packages.contracts import load_qpos_contract
 from packages.detection import fuse_pingpong_hits, pca_motion_scores
 from packages.lerobot_v21 import episode_parquet, task_roots
 from packages.range_plan import load_plan, make_plan, write_plan
+from examples.pingpong.ball_detection import BallDetectorConfig, detect_episode_ball_frames
 
 
-def _process_episode(job: tuple[Path, dict, str, tuple[int, ...], float, int, list[int]]) -> dict:
-    root, candidate, qpos_key, feature_indices, score_threshold, max_delta, ball_frames = job
+def _process_episode(
+    job: tuple[
+        Path,
+        dict,
+        str,
+        tuple[int, ...],
+        float,
+        int,
+        dict[str, list[int]] | None,
+        BallDetectorConfig,
+    ]
+) -> dict:
+    (
+        root,
+        candidate,
+        qpos_key,
+        feature_indices,
+        score_threshold,
+        max_delta,
+        provided_ball_frames,
+        ball_config,
+    ) = job
     episode_index = int(candidate["episode_index"])
     table = pq.read_table(episode_parquet(root, episode_index), columns=[qpos_key])
     qpos = np.asarray(table[qpos_key].to_pylist(), dtype=np.float32)
+    if int(candidate["source_frames"]) != len(qpos):
+        raise ValueError(
+            f"{candidate['task']} episode {episode_index}: candidate plan has "
+            f"{candidate['source_frames']} frames but input has {len(qpos)}"
+        )
+    if provided_ball_frames is None:
+        camera_ball_frames = detect_episode_ball_frames(
+            root, episode_index, len(qpos), ball_config
+        )
+        ball_frames = sorted({frame for frames in camera_ball_frames.values() for frame in frames})
+    else:
+        if any(frame >= len(qpos) for frame in provided_ball_frames):
+            raise ValueError(
+                f"{candidate['task']} episode {episode_index}: ball event exceeds "
+                "the episode frame count"
+            )
+        camera_ball_frames = {"provided_events": provided_ball_frames}
+        ball_frames = provided_ball_frames
     candidate_ranges = candidate["keep_ranges"]
     pca_frames: list[int] = []
     for start, end in candidate_ranges:
@@ -43,6 +82,7 @@ def _process_episode(job: tuple[Path, dict, str, tuple[int, ...], float, int, li
         "detectors": ["pingpong-hit-v1"],
         "evidence": {
             "ball_frames": ball_frames,
+            "ball_frames_by_camera": camera_ball_frames,
             "pca_hit_frames": sorted(set(int(frame) for frame in pca_frames)),
             "aligned_hits": hits,
         },
@@ -53,7 +93,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--candidate-plan", type=Path, required=True)
-    parser.add_argument("--ball-events", type=Path, required=True)
+    parser.add_argument(
+        "--ball-events",
+        type=Path,
+        help=(
+            "Optional precomputed ball-events/v1 evidence; by default videos are "
+            "scanned automatically."
+        ),
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
         "--contract",
@@ -64,6 +111,11 @@ def main() -> None:
         "--detector-config",
         type=Path,
         default=REPO_ROOT / "config/detectors/pingpong_hit.json",
+    )
+    parser.add_argument(
+        "--ball-detector-config",
+        type=Path,
+        default=REPO_ROOT / "config/detectors/pingpong_ball.json",
     )
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--debug", action="store_true")
@@ -78,7 +130,12 @@ def main() -> None:
         raise SystemExit(
             "candidate plan must be a gripper-candidates plan for the selected contract"
         )
-    ball_events = load_ball_events(args.ball_events, contract.contract_id)
+    ball_events = (
+        load_ball_events(args.ball_events, contract.contract_id)
+        if args.ball_events
+        else None
+    )
+    ball_detector = BallDetectorConfig.load(args.ball_detector_config)
     config = json.loads(args.detector_config.read_text(encoding="utf8"))
     feature_indices = tuple(contract.index(name) for name in config["pca_feature_names"])
     roots = {root.name: root for root in task_roots(args.input)}
@@ -95,7 +152,12 @@ def main() -> None:
                 feature_indices,
                 float(config["pca_score_z_threshold"]),
                 int(config["ball_pca_max_frame_delta"]),
-                ball_events.get((task, int(candidate["episode_index"])), []),
+                (
+                    ball_events.get((task, int(candidate["episode_index"])), [])
+                    if ball_events is not None
+                    else None
+                ),
+                ball_detector,
             )
         )
     results = []
@@ -105,7 +167,13 @@ def main() -> None:
             entry = future.result()
             results.append(entry)
             if args.debug:
-                print(f"{entry['task']} ep={entry['episode_index']} final={entry['keep_ranges']}")
+                print(
+                    f"{entry['task']} ep={entry['episode_index']} "
+                    f"ball={entry['evidence']['ball_frames']} "
+                    f"pca={entry['evidence']['pca_hit_frames']} "
+                    f"aligned={entry['evidence']['aligned_hits']} "
+                    f"final={entry['keep_ranges']}"
+                )
             print(f"pingpong_hit_progress={completed}/{len(jobs)}", flush=True)
     final_plan = make_plan(
         contract=contract.contract_id,

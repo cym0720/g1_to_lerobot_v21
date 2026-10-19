@@ -1,0 +1,111 @@
+run_id: DP_1015_h20_aug_h16_30k
+run_root_dir: /data2/cym_ws/pick_apple_1008_act_dp_groot_20261014/runs
+seed: 42
+wandb_entity: null
+wandb_project: starVLA_pick_apple_1015_delta_30k_20261016
+is_debug: false
+version_id: '0.21'
+framework:
+  name: DiffusionPolicy
+  chunk_size: 16
+  horizon: 16
+  n_obs_steps: 1
+  n_action_steps: 16
+  action_encoding: joints
+  action_dim: 20
+  state_dim: 20
+  image_keys:
+  - cam_high_rgb
+  - cam_left_wrist_rgb
+  - cam_right_wrist_rgb
+  image_size:
+  - 224
+  - 224
+  pretrained_backbone: false
+  num_inference_steps: 20
+  obs_as_global_cond: true
+  diffusion_step_embed_dim: 256
+  down_dims:
+  - 256
+  - 512
+  - 1024
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: true
+  num_train_timesteps: 100
+  loss_dim_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+  delta_loss_weight: 0.053
+datasets:
+  vlm_data:
+    dataset_py: vlm_datasets
+    per_device_batch_size: 1
+  vla_data:
+    dataset_py: lerobot_datasets
+    include_state: true
+    data_root_dir: /data2/cym_ws/pick_apple_1008_act_dp_groot_20261014/baselines/data_overlay
+    data_mix: g1_pick_apple_1015_train36_c16
+    default_prompt: perform the requested G1 manipulation task
+    per_device_batch_size: 32
+    load_all_data_for_training: true
+    cache_video_frames: true
+    obs_image_size:
+    - 224
+    - 224
+    video_backend: torchvision_av
+    lerobot_version: v2.0
+    num_workers: 0
+    pin_memory: true
+    drop_last: true
+    balance_dataset_weights: false
+    balance_trajectory_weights: true
+    action_mode: abs
+    image_augmentation: null
+trainer:
+  pretrained_checkpoint: null
+  max_train_steps: 30000
+  num_warmup_steps: 500
+  save_interval: 5000
+  eval_interval: 5000
+  batch_eval_enabled: false
+  checkpoint_gt_eval: true
+  gt_eval_script: /data2/cym_ws/pick_apple_1008_act_dp_groot_20261014/baselines/experiment/evaluate_checkpoint.py
+  gt_dataset: /data2/cym_ws/pick_apple_1008_act_dp_groot_20261014/data/training_split_1015_letterbox224_v1/val
+  gt_manifest: /data2/cym_ws/pick_apple_1008_act_dp_groot_20261014/data/training_split_1015_letterbox224_v1/training_manifest.json
+  gt_output_root: /data2/cym_ws/pick_apple_1008_act_dp_groot_20261014/runs/DP_1015_h20_aug_h16_30k/gt
+  gt_device: cuda:0
+  gt_algorithm: DP
+  final_proof_script: /data2/cym_ws/pick_apple_1008_act_dp_groot_20261014/baselines/experiment/final_inference_proof.py
+  final_proof_output: /data2/cym_ws/pick_apple_1008_act_dp_groot_20261014/runs/DP_1015_h20_aug_h16_30k/final_inference_proof.json
+  diagnostic_dataset: /data2/cym_ws/pick_apple_1008_act_dp_groot_20261014/data/training_split_1015_letterbox224_v1/train
+  diagnostic_manifest: /data2/cym_ws/pick_apple_1008_act_dp_groot_20261014/data/training_split_1015_letterbox224_v1/training_manifest.json
+  diagnostic_output_root: /data2/cym_ws/pick_apple_1008_act_dp_groot_20261014/runs/DP_1015_h20_aug_h16_30k/train_diagnostics
+  diagnostic_episodes:
+  - 0
+  - 1
+  python_executable: /data2/cym_ws/pick_apple_1008_act_dp_groot_20261014/.envs/baselines/bin/python
+  learning_rate:
+    base: 2.5e-05
+    action_model: 0.0001
+  lr_scheduler_type: cosine_with_min_lr
+  scheduler_specific_kwargs:
+    min_lr: 1.0e-06
+  freeze_modules: ''
+  max_grad_norm: 1.0
+  weight_decay: 0.0
+  logging_frequency: 20
+  gradient_clipping: 1.0
+  gradient_accumulation_steps: 1
+  gradient_checkpointing: true
+  save_format: pt
+  optimizer:
+    name: AdamW
+    betas: [0.9, 0.95]
+    eps: 1.0e-08
+    weight_decay: 1.0e-08
+h20_augmentation_contract:
+  enabled_train_only: true
+  probability: 0.5
+  brightness: [0.9, 1.1]
+  contrast: [0.9, 1.1]
+  shared_temporal_parameters: true
+  implementation_pending: false

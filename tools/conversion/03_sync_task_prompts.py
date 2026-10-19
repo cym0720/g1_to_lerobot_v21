@@ -26,6 +26,14 @@ def main() -> None:
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--task-map", type=Path, default=REPO_ROOT / "config/task_id_map.json")
     parser.add_argument("--apply", action="store_true", help="Write files; omit for a dry run.")
+    parser.add_argument(
+        "--prompt",
+        help="直接指定新提示词，跳过 task map / source_task_id 解析（用于缺 source_task_id 的历史划分）",
+    )
+    parser.add_argument(
+        "--match",
+        help="只改写当前提示词恰好等于该值的任务目录；与 --prompt 连用，防止波及同级任务",
+    )
     args = parser.parse_args()
     mapping = json.loads(args.task_map.read_text(encoding="utf8"))["tasks"]
     report = []
@@ -36,13 +44,29 @@ def main() -> None:
             for line in episodes_path.read_text(encoding="utf8").splitlines()
             if line.strip()
         ]
-        ids = {str(row.get("source_task_id", "")) for row in rows}
-        if len(ids) != 1 or next(iter(ids)) not in mapping:
-            raise ValueError(
-                f"{root.name}: cannot resolve exactly one mapped source_task_id: {sorted(ids)}"
-            )
-        task_id = next(iter(ids))
-        prompt = mapping[task_id]["name"]
+        if args.prompt is not None:
+            current = {
+                row.get("task", "")
+                for row in (
+                    json.loads(x)
+                    for x in (root / "meta/tasks.jsonl").read_text(encoding="utf8").splitlines()
+                    if x.strip()
+                )
+            }
+            if args.match is not None and current != {args.match}:
+                print(f"{root.name}: skipped current={sorted(current)!r}", flush=True)
+                continue
+            if len(current) != 1:
+                raise ValueError(f"{root.name}: 期望单任务提示词，实际 {sorted(current)}")
+            prompt, task_id = args.prompt, "forced"
+        else:
+            ids = {str(row.get("source_task_id", "")) for row in rows}
+            if len(ids) != 1 or next(iter(ids)) not in mapping:
+                raise ValueError(
+                    f"{root.name}: cannot resolve exactly one mapped source_task_id: {sorted(ids)}"
+                )
+            task_id = next(iter(ids))
+            prompt = mapping[task_id]["name"]
         report.append(
             {
                 "task_directory": root.name,

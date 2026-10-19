@@ -29,6 +29,13 @@ uv run pytest -q
 - `tools/testing/`：原始数据检查、LeRobot 全量读取与 ACT smoke test。
 - `dataset/`：原始数据（Git 忽略）。
 - `output/`：转换、清洗、报告和训练产物（Git 忽略）。
+- `experiments/h20/`：远端训练与部署快照，不属于本机清洗主流程。
+- `tools/diagnostics/h20/`、`tools/transfer/h20/`：历史评估和下载脚本。
+- `artifacts/`：下载包、二进制与评估产物（Git 忽略）。
+
+通用与特定批次转换工具的区别见 [转换工具索引](tools/conversion/README.md)。
+根目录原 `scripts_stage/`、训练入口、`fetch_*.sh` 和临时评估脚本已归入上述目录；
+旧部署打包器保存在 `tools/legacy/deployment/`。这些历史脚本需要其原远端环境。
 
 StarVLA 训练与验证已移至独立 WSL 工作区
 `/home/cym/Projects_2026/starvla-g1-validation`。该工作区使用 `uv`、独立
@@ -81,6 +88,9 @@ meta/stats.json
 
 当前转换所有非深度相机流：头部 RGB、左右腕部 RGB、头部中心/左/右鱼眼 RGB；深度流明确不转换。
 ## TODO
+
+腰部原始顺序显式声明等待办见 [TODO.md](TODO.md)。目前顺序检测仍为数值启发式，
+无法判定时会保留原始顺序；转换成功本身不能证明关节语义正确。
 
 - [ ] 低通滤波：基于代表性遥操轨迹确定 action 起始段平滑的截止频率、持续时间和交叉淡入参数，并完成前后动作曲线与 ACT 训练效果对比。
 - [ ] FFmpeg 解码加速：在 `experiment/process-parallel-conversion` 分支中，以 FFmpeg 替代 Python/PyAV 的 H.265 逐帧解码；实现跨任务全局进程池、限制单进程线程数，并以相同输入测试吞吐、输出帧数与 LeRobot v2.1 完整读取一致性。

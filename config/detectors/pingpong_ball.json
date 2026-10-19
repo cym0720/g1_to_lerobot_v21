@@ -1,0 +1,18 @@
+{
+  "detector_id": "pingpong-orange-track-v1",
+  "color_space": "opencv_hsv",
+  "hsv_low": [8, 120, 110],
+  "hsv_high": [18, 235, 235],
+  "min_area": 20,
+  "max_area_fraction": 0.015,
+  "min_radius": 2.0,
+  "max_radius_fraction": 0.055,
+  "min_circularity": 0.35,
+  "cameras": ["cam_high", "cam_left_wrist"],
+  "max_track_jump_fraction": 0.3,
+  "min_move_pixels": 1.5,
+  "motion_window": 3,
+  "min_moving_steps": 2,
+  "min_roi_area_ratio": 0.55,
+  "max_roi_area_ratio": 2.0
+}

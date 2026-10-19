@@ -39,11 +39,11 @@ powershell -ExecutionPolicy Bypass -File src/clean_tools/run_618_pipeline.ps1 `
 乒乓球仅比普通链路多两步，且两步都在通用统计与验证之前：
 
 1. 夹爪候选：从 qpos 中找出可能的击打区间。
-2. 球检测 + PCA：球事件与关节 PCA 运动证据共同确认击打，输出 `range-plan/v1`。
+2. 球检测 + PCA：第二步自动用 OpenCV 扫描高位和左腕相机中的橙色乒乓球并做连续跟踪，再与右臂关节 PCA 运动证据对齐，输出 `range-plan/v1`。外部检测器或人工审核事件可选通过 `--ball-events` 输入，不是默认前置步骤。
 
-随后由 `tools/split_by_ranges.py` 消费区间计划并物化裁剪后的独立 LeRobot episode；之后
+球检测帧、PCA 异常帧及其对齐证据都会写进最终区间计划。随后由 `tools/split_by_ranges.py` 消费区间计划并物化裁剪后的独立 LeRobot episode；之后
 复用普通链路的统计、完整读取和 ACT smoke 门禁。PCA 和通用切分器在 `packages/`，而乒乓球
-专项组合逻辑在 `examples/pingpong/`。
+检测及专项组合逻辑在 `examples/pingpong/`。
 
 ## 数据契约与夹爪语义
 

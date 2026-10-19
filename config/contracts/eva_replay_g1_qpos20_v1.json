@@ -9,7 +9,7 @@
       "names": [
         "left_arm_joint1", "left_arm_joint2", "left_arm_joint3", "left_arm_joint4", "left_arm_joint5", "left_arm_joint6", "left_arm_joint7", "left_gripper",
         "right_arm_joint1", "right_arm_joint2", "right_arm_joint3", "right_arm_joint4", "right_arm_joint5", "right_arm_joint6", "right_arm_joint7", "right_gripper",
-        "head_yaw", "head_pitch", "lift", "waist_pitch"
+        "head_yaw", "head_pitch", "waist_pitch", "lift"
       ]
     },
     "action.qpos": {
@@ -37,6 +37,7 @@
     "Do not emit legacy packed observation.state or action vectors in new EVA datasets.",
     "Do not emit eef unless a full frame-aligned 16D source mapping exists.",
     "Preserve source video resolution on disk; model resize is a runtime concern.",
-    "Never overwrite a converted dataset; write a new target directory."
+    "Never overwrite a converted dataset; write a new target directory.",
+    "Body order at indices 18/19 is [waist_pitch, lift] (EVA-CLIENT canonical contract). Recordings whose raw waist stream is lift-first (e.g. the 1008 batch) must be reordered to this contract at conversion time; DP-side consumers require an explicit order adaptation instead of a contract change."
   ]
 }

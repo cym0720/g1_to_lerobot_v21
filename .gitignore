@@ -24,3 +24,9 @@ act_training_package.zip
 # Independently versioned upstream framework/vendor checkouts.
 external/
 vendor/
+
+# Local reports, downloaded binaries/bundles and nested working checkouts.
+/artifacts/
+/.merge-main-worktree/
+.pytest_cache/
+.ruff_cache/

@@ -18,6 +18,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from packages.contracts import load_qpos_contract
+from packages.camera_geometry import validate_no_crop_camera_schema
 from packages.detection import fuse_pingpong_hits, gripper_candidate_ranges, pca_motion_scores
 from packages.eva_qpos import assemble_g1_qpos, to_closed_fraction
 from packages.range_plan import make_plan
@@ -46,8 +47,40 @@ class ContractAndDetectionTests(unittest.TestCase):
         self.assertEqual(len(contract.qpos_names), 20)
         self.assertEqual(contract.gripper_indices, (7, 15))
         self.assertEqual(
-            contract.qpos_names[16:], ("head_yaw", "head_pitch", "lift", "waist_pitch")
+            contract.qpos_names[16:], ("head_yaw", "head_pitch", "waist_pitch", "lift")
         )
+
+    def test_camera_conversion_schema_preserves_full_source_geometry(self) -> None:
+        """Schema rejects crop and resize, retaining 1280x800 through conversion."""
+        schema = json.loads((REPO / "config/618_lerobot_schema.json").read_text(encoding="utf8"))
+        validate_no_crop_camera_schema(schema)
+        high = schema["cameras"]["observation.images.cam_high"]
+        self.assertEqual(high["output_shape"], [800, 1280, 3])
+        crop_schema = json.loads(json.dumps(schema))
+        crop_schema["cameras"]["observation.images.cam_high"]["crop"] = {
+            "x": 0,
+            "y": 40,
+            "width": 1280,
+            "height": 720,
+        }
+        with self.assertRaisesRegex(ValueError, "cropping is forbidden"):
+            validate_no_crop_camera_schema(crop_schema)
+
+        transform_schema = json.loads(json.dumps(schema))
+        transform_schema["cameras"]["observation.images.cam_high"]["transform"] = (
+            "center_crop_vertical"
+        )
+        with self.assertRaisesRegex(ValueError, "only identity is allowed"):
+            validate_no_crop_camera_schema(transform_schema)
+
+        resize_schema = json.loads(json.dumps(schema))
+        resize_schema["cameras"]["observation.images.cam_high"]["output_shape"] = [
+            720,
+            1280,
+            3,
+        ]
+        with self.assertRaisesRegex(ValueError, "changes resolution"):
+            validate_no_crop_camera_schema(resize_schema)
 
     def test_gripper_ranges_are_inclusive_and_filtered(self) -> None:
         """夹爪候选范围使用闭区间，并丢弃短于阈值的片段。"""
@@ -114,6 +147,32 @@ class ContractAndDetectionTests(unittest.TestCase):
         self.assertEqual(assembly.state[0, 7], 0.0)
         self.assertEqual(assembly.state[0, 15], 1.0)
         self.assertEqual(assembly.state[0, 16:].tolist(), [1.0, 2.0, 5.0, 6.0])
+        self.assertEqual(assembly.action[0, 18:].tolist(), [5.0, 6.0])
+
+    def test_action_gripper_can_use_normalized_closed_fraction(self) -> None:
+        """A 0..1 action must not be divided by the state's 0..120 encoder scale."""
+        source = json.loads((REPO / "config/sources/g1.json").read_text(encoding="utf8"))
+        self.assertEqual(source["gripper_convention"], "raw_encoder_0_120")
+        self.assertEqual(source["action_gripper_convention"], "closed_0_1")
+        columns = {
+            "observation.state.joint_position": np.zeros((1, 14), dtype=np.float32),
+            "observation.state.left_effector_position": np.zeros((1, 1), dtype=np.float32),
+            "observation.state.right_effector_position": np.array([[120.0]], dtype=np.float32),
+            "observation.state.head_position": np.zeros((1, 2), dtype=np.float32),
+            "observation.state.waist_position": np.zeros((1, 2), dtype=np.float32),
+            "action.joint_position": np.zeros((1, 14), dtype=np.float32),
+            "action.left_effector_position": np.zeros((1, 1), dtype=np.float32),
+            "action.right_effector_position": np.array([[1.0]], dtype=np.float32),
+            "action.head_position": np.zeros((1, 2), dtype=np.float32),
+            "action.waist_position": np.zeros((1, 2), dtype=np.float32),
+        }
+        assembly = assemble_g1_qpos(
+            columns,
+            gripper_convention="raw_encoder_0_120",
+            action_gripper_convention="closed_0_1",
+        )
+        self.assertEqual(assembly.state[0, 15], 1.0)
+        self.assertEqual(assembly.action[0, 15], 1.0)
 
     def test_opening_input_is_inverted_and_action_fallback_is_explicit(self) -> None:
         self.assertEqual(

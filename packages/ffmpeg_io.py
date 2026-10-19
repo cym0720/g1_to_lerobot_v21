@@ -11,6 +11,13 @@ class FFmpegBackendError(RuntimeError):
 
 
 def run_ffmpeg(command: list[str]) -> None:
+    """执行一条 FFmpeg 命令。
+
+    这里的 Python 代码不直接实现视频编码，而是负责拼接参数并启动
+    FFmpeg 子进程。真正使用 libx264、NVENC 或 QSV 编码的是 FFmpeg。
+    """
+    # -y：目标文件已存在时直接覆盖；-loglevel error：只输出错误，避免日志过于冗长。
+    # check=True：FFmpeg 返回非零状态时立即抛出异常，让上层尝试下一个后端。
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *command], check=True)
 
 
@@ -97,9 +104,13 @@ def nearest_indices(source_timestamps: np.ndarray, target_timestamps: np.ndarray
 
 
 def _select_filter(indices: Iterable[int], fps: int, crop: dict | None) -> str:
+    """生成 FFmpeg 视频滤镜链：选帧、重置时间戳，以及可选裁剪。"""
+    # eq(n, index) 按解码后的帧序号选择指定帧；多个条件用 + 连接表示“满足任意一个”。
     expression = "+".join("eq(n\\,{})".format(int(index)) for index in indices)
+    # select 会丢弃帧，因此必须用 setpts 重新生成连续的输出时间戳。
     filters = ["select='{}'".format(expression), "setpts=N/({}*TB)".format(fps)]
     if crop:
+        # crop 的参数顺序是 width:height:x:y。
         filters.append(
             "crop={}:{}:{}:{}".format(crop["width"], crop["height"], crop["x"], crop["y"])
         )
@@ -109,7 +120,15 @@ def _select_filter(indices: Iterable[int], fps: int, crop: dict | None) -> str:
 def _backend_command(
     backend: str, source: Path, video_filter: str, fps: int, destination: Path
 ) -> list[str]:
+    """根据后端名称生成 FFmpeg 命令参数。
+
+    注意：函数只返回参数列表，不在这里执行命令；执行统一由 run_ffmpeg() 完成。
+    """
     if backend == "cuda":
+        # CUDA 路径：
+        # 1) hevc_cuvid/NVDEC 在 GPU 上解码 H.265；
+        # 2) hwdownload 把硬件帧取回系统内存，便于执行 select/crop 等滤镜；
+        # 3) h264_nvenc/NVENC 在 GPU 上编码为 H.264。
         return [
             "-hwaccel",
             "cuda",
@@ -134,6 +153,7 @@ def _backend_command(
             str(destination),
         ]
     if backend == "qsv":
+        # Intel Quick Sync 路径，作为 NVIDIA CUDA 不可用时的备用硬件后端。
         return [
             "-hwaccel",
             "qsv",
@@ -153,6 +173,7 @@ def _backend_command(
             "23",
             str(destination),
         ]
+    # CPU 兜底路径：FFmpeg 使用 libx264 软件编码器。
     return [
         "-threads",
         "1",
@@ -181,21 +202,42 @@ def encode_h265_aligned(
     crop: dict | None = None,
     preferred_backends: tuple[str, ...] = ("cuda", "qsv", "cpu"),
 ) -> str:
+    """按目标时间戳抽取 H.265 帧，再编码为帧数严格一致的 MP4。"""
+    # 将源视频时间戳映射到统一的目标时间戳，得到需要保留的源帧下标。
     selected = nearest_indices(source_timestamps, target_timestamps)
     if len(np.unique(selected)) != len(selected):
+        # 同一源帧被选中两次会导致时间对齐和输出帧数语义不明确，因此直接拒绝。
         raise ValueError("duplicate timestamp-aligned H.265 frame selection")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    graph = _select_filter(selected, fps, crop)
+    # 多数头部相机使用自己的时间戳作为目标时钟，因此源帧通常已经是完整、连续的。
+    # 这种情况下只需 setpts，不要生成几千项的 select 表达式；Windows 可能因命令行过长
+    # 报 WinError 206。
+    if len(selected) == len(source_timestamps) and np.array_equal(
+        selected, np.arange(len(source_timestamps))
+    ):
+        filters = ["setpts=N/({}*TB)".format(fps)]
+        if crop:
+            filters.append(
+                "crop={}:{}:{}:{}".format(
+                    crop["width"], crop["height"], crop["x"], crop["y"]
+                )
+            )
+        graph = ",".join(filters)
+    else:
+        graph = _select_filter(selected, fps, crop)
     failures = []
     for backend in preferred_backends:
         try:
+            # 每次尝试前删除上一个失败后可能留下的不完整 MP4。
             destination.unlink(missing_ok=True)
             run_ffmpeg(_backend_command(backend, source, graph, fps, destination))
             count = video_frame_count(destination)
             if count != len(selected):
+                # FFmpeg 没报错不等于数据正确，还必须验证输出帧数。
                 raise RuntimeError("frame count {} != {}".format(count, len(selected)))
             return backend
         except (subprocess.CalledProcessError, RuntimeError) as error:
+            # 当前后端失败后记录原因，继续尝试下一个后端。
             destination.unlink(missing_ok=True)
             failures.append("{}: {}".format(backend, error))
     raise FFmpegBackendError("; ".join(failures))
@@ -282,7 +324,11 @@ def encode_jpeg_sequence(
     fps: int,
     preferred_backends: tuple[str, ...] = ("cpu", "qsv", "cuda"),
 ) -> str:
-    """Encode timestamp-aligned JPG files through NVENC, QSV, or libx264."""
+    """将按时间戳选出的 JPG 序列编码成 MP4。
+
+    默认后端顺序是 CPU → QSV → CUDA；因此 JPG 腕部相机在 CPU 编码成功时，
+    不会继续使用 NVENC。输出的 MP4 帧数必须与输入 JPG 数量一致。
+    """
     import os
     import shutil
     import tempfile
@@ -294,6 +340,7 @@ def encode_jpeg_sequence(
     with tempfile.TemporaryDirectory(prefix="lerobot_jpg_") as temporary:
         directory = Path(temporary)
         for index, source in enumerate(selected_files):
+            # FFmpeg 的图片序列输入要求文件名连续；优先使用硬链接，失败时再复制文件。
             target = directory / "{:06d}.jpg".format(index)
             try:
                 os.link(source, target)
@@ -301,7 +348,10 @@ def encode_jpeg_sequence(
                 shutil.copy2(source, target)
         for backend in preferred_backends:
             try:
+                # 同一个输出路径会依次尝试不同编码后端，尝试前先清理旧文件。
                 destination.unlink(missing_ok=True)
+                # -framerate 是输入图片读取速度；-r 是输出视频帧率。
+                # %06d.jpg 对应 000000.jpg、000001.jpg……这样的连续图片序列。
                 base = [
                     "-framerate",
                     str(fps),
@@ -315,17 +365,22 @@ def encode_jpeg_sequence(
                     "yuv420p",
                 ]
                 if backend == "cuda":
+                    # NVENC：使用 NVIDIA 的硬件 H.264 编码器；这里主要加速编码阶段。
                     command = [*base, "-c:v", "h264_nvenc", "-preset", "p4", str(destination)]
                 elif backend == "qsv":
+                    # QSV：使用 Intel 硬件 H.264 编码器。
                     command = [*base, "-c:v", "h264_qsv", "-global_quality", "23", str(destination)]
                 else:
+                    # libx264：CPU 软件 H.264 编码器；当前默认顺序下通常先走这里。
                     command = [*base, "-c:v", "libx264", "-crf", "20", str(destination)]
                 run_ffmpeg(command)
                 count = video_frame_count(destination)
                 if count != len(selected_files):
+                    # 编码过程无报错，但帧数不一致时仍视为失败，继续尝试下一个后端。
                     raise RuntimeError("frame count {} != {}".format(count, len(selected_files)))
                 return backend
             except (subprocess.CalledProcessError, RuntimeError) as error:
+                # 删除不完整输出并保留错误信息，最终全部失败时一次性汇总抛出。
                 destination.unlink(missing_ok=True)
                 failures.append("{}: {}".format(backend, error))
     raise FFmpegBackendError("; ".join(failures))
