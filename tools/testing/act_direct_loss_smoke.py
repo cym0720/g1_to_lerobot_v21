@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -20,11 +21,26 @@ def main() -> None:
     args = parser.parse_args()
     if args.output.exists():
         raise SystemExit(f"refusing to overwrite: {args.output}")
-    table = pq.read_table(args.parquet, columns=["observation.state", "action"])
-    states = np.asarray(table["observation.state"].to_pylist(), dtype=np.float32)
-    actions = np.asarray(table["action"].to_pylist(), dtype=np.float32)
+    # EVA keeps qpos names on disk. LeRobot 0.3.3 ACT internally still looks
+    # up literal `observation.state` and `action`, so this gate adapts only
+    # its in-memory batch rather than contaminating the stored contract.
+    table = pq.read_table(args.parquet, columns=["observations.state.qpos", "action.qpos"])
+    states = np.asarray(table["observations.state.qpos"].to_pylist(), dtype=np.float32)
+    actions = np.asarray(table["action.qpos"].to_pylist(), dtype=np.float32)
     if states.ndim != 2 or actions.ndim != 2:
         raise ValueError(f"expected rank-2 state/action, got {states.shape}/{actions.shape}")
+    task_root = args.parquet.parents[2]
+    stats = json.loads((task_root / "meta/stats.json").read_text(encoding="utf8"))
+    dataset_stats = {
+        policy_key: {
+            name: np.asarray(stats[source_key][name], dtype=np.float32)
+            for name in ("mean", "std", "min", "max")
+        }
+        for policy_key, source_key in (
+            ("observation.state", "observations.state.qpos"),
+            ("action", "action.qpos"),
+        )
+    }
     chunk = min(8, len(actions))
     config = ACTConfig(
         input_features={
@@ -46,7 +62,7 @@ def main() -> None:
         device="cpu",
     )
     torch.manual_seed(42)
-    model = ACTPolicy(config)
+    model = ACTPolicy(config, dataset_stats=dataset_stats)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     starts = np.linspace(0, len(actions) - chunk, num=min(4, len(actions) - chunk + 1), dtype=int)
     losses: list[float] = []

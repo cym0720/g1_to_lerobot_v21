@@ -1,0 +1,4 @@
+# CUDA 12.4 的 PyTorch 只能从官方 CUDA wheel 索引安装。
+# 该文件由 setup_uv.sh 单独安装，避免 CUDA 索引干扰其他 PyPI 包解析。
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124

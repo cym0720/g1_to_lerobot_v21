@@ -1,0 +1,86 @@
+{
+    "description":  "618data 转为 LeRobot 时使用的可编辑 schema。由转换器读取，不属于预览工具。",
+    "fps":  30,
+    "exclude_modalities":  [
+                               "depth"
+                           ],
+    "cameras":  {
+                    "observation.images.cam_high":  {
+                                                            "source":  "camera/head_color/head_color.h265",
+                                                            "timestamp_source":  "camera/head_color/head_color.txt",
+                                                            "kind":  "h265_timestamp_aligned",
+                                                            "source_shape":  [
+                                                                                 800,
+                                                                                 1280,
+                                                                                 3
+                                                                             ],
+                                                            "output_shape":  [
+                                                                                 800,
+                                                                                 1280,
+                                                                                 3
+                                                                             ],
+                                                            "transform":  "identity",
+                                                            "reference":  "保留原始头相机 RGB 完整画面；模型输入统一使用 letterbox，不裁剪"
+                                                        },
+                    "observation.images.cam_left_wrist":  {
+                                                                  "source":  "camera/hand_left/color/*.jpg",
+                                                                  "kind":  "jpg_timestamp_aligned",
+                                                                  "output_shape":  [
+                                                                                       480,
+                                                                                       848,
+                                                                                       3
+                                                                                   ],
+                                                                  "transform":  "identity",
+                                                                  "reference":  "robocoin"
+                                                              },
+                    "observation.images.cam_right_wrist":  {
+                                                                   "source":  "camera/hand_right/color/*.jpg",
+                                                                   "kind":  "jpg_timestamp_aligned",
+                                                                   "output_shape":  [
+                                                                                        480,
+                                                                                        848,
+                                                                                        3
+                                                                                    ],
+                                                                   "transform":  "identity",
+                                                                   "reference":  "robocoin"
+                                                               },
+                    "observation.images.cam_high_center_fisheye_rgb":  {
+                                                                           "source":  "camera/head_center_fisheye/head_center_fisheye.h265",
+                                                                           "timestamp_source":  "camera/head_center_fisheye/head_center_fisheye.txt",
+                                                                           "kind":  "h265_timestamp_aligned",
+                                                                           "output_shape":  [
+                                                                                                1536,
+                                                                                                1920,
+                                                                                                3
+                                                                                            ],
+                                                                           "transform":  "identity",
+                                                                           "reference":  "robocoin observation.images.cam_high_center_fisheye_rgb"
+                                                                       },
+                    "observation.images.cam_high_left_fisheye_rgb":  {
+                                                                         "source":  "camera/head_left_fisheye/head_left_fisheye.h265",
+                                                                         "timestamp_source":  "camera/head_left_fisheye/head_left_fisheye.txt",
+                                                                         "kind":  "h265_timestamp_aligned",
+                                                                         "output_shape":  [
+                                                                                              1536,
+                                                                                              1920,
+                                                                                              3
+                                                                                          ],
+                                                                         "transform":  "identity",
+                                                                         "reference":  "robocoin observation.images.cam_high_left_fisheye_rgb"
+                                                                     },
+                    "observation.images.cam_high_right_fisheye_rgb":  {
+                                                                          "source":  "camera/head_right_fisheye/head_right_fisheye.h265",
+                                                                          "timestamp_source":  "camera/head_right_fisheye/head_right_fisheye.txt",
+                                                                          "kind":  "h265_timestamp_aligned",
+                                                                          "output_shape":  [
+                                                                                               1536,
+                                                                                               1920,
+                                                                                               3
+                                                                                           ],
+                                                                          "transform":  "identity",
+                                                                          "reference":  "robocoin observation.images.cam_high_right_fisheye_rgb"
+                                                                      }
+                },
+    "task_map":  "config/task_maps/618_default.json",
+    "field_definitions":  "config/schemas/618_field_definitions.json"
+}

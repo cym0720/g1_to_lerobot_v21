@@ -1,0 +1,45 @@
+{
+  "contract_id": "g1-head-color-lr-fisheye-qpos20-v1",
+  "robot": "g1",
+  "control_mode": "qpos",
+  "source_schema": "config/schemas/g1_head_color_lr_fisheye_schema.json",
+  "camera_order": [
+    "observation.images.head_color",
+    "observation.images.head_left_fisheye",
+    "observation.images.head_right_fisheye"
+  ],
+  "reference_clock": "camera/head_color/head_color.txt",
+  "required_features": {
+    "observation.state": {
+      "dtype": "float32",
+      "shape": [20],
+      "names": [
+        "left_arm_joint1", "left_arm_joint2", "left_arm_joint3", "left_arm_joint4", "left_arm_joint5", "left_arm_joint6", "left_arm_joint7",
+        "right_arm_joint1", "right_arm_joint2", "right_arm_joint3", "right_arm_joint4", "right_arm_joint5", "right_arm_joint6", "right_arm_joint7",
+        "left_gripper", "right_gripper", "head_yaw", "head_pitch", "waist_pitch", "lift"
+      ]
+    },
+    "action": {
+      "dtype": "float32",
+      "shape": [20],
+      "same_order_as": "observation.state"
+    }
+  },
+  "gripper": {
+    "range": [0.0, 1.0],
+    "semantic": "closed_fraction",
+    "open": 0.0,
+    "closed": 1.0
+  },
+  "permutation_from_eva_replay_g1_qpos20_v1": [
+    0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 7, 15, 16, 17, 18, 19
+  ],
+  "default_policy_action_indices": [7, 8, 9, 10, 11, 12, 13, 15],
+  "storage_geometry": "preserve source video dimensions",
+  "timestamp_policy": "align source streams to the head_color timestamp reference; cleaned-stage trims must preserve original trim bounds",
+  "writer_rules": [
+    "This is a separate named contract from EVA replay qpos20 because the gripper and right-arm dimensions have a different order.",
+    "Map state and action by semantic joint name, then validate the written Parquet values and statistics against this order.",
+    "Do not treat the camera schema or this contract alone as proof that conversion and validation gates passed."
+  ]
+}

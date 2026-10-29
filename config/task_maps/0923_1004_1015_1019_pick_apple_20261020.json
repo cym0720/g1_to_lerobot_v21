@@ -1,0 +1,15 @@
+{
+  "description": "Task mapping for the 0923, 1004, 1015 and 1019 G1 pick-apple reconversion.",
+  "tasks": {
+    "1": {
+      "order": 1,
+      "name": "pick the apple to the plate",
+      "directory": "pick_apple_task_1"
+    },
+    "2": {
+      "order": 2,
+      "name": "pick the apple to the plate",
+      "directory": "pick_apple_task_2"
+    }
+  }
+}

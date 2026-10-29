@@ -1,0 +1,10 @@
+{
+  "description": "1015 批次 task_id 映射。任务文本按用户指定为 pick up the apple and put it into the plate；夹爪语义同 1008：closed_fraction，0=开 1=闭。任务目录名保留转换时的 empty_text_task_1（目录名不影响提示词同步）。",
+  "tasks": {
+    "1": {
+      "order": 1,
+      "name": "pick up the apple and put it into the plate",
+      "directory": "empty_text_task_1"
+    }
+  }
+}

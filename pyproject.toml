@@ -1,3 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "g1-data-cleaning"
+version = "0.1.0"
+description = "G1 raw recording conversion and LeRobot v2.1 cleaning pipeline"
+readme = "README.md"
+requires-python = ">=3.10,<3.12"
+dependencies = [
+    "av==15.1.0",
+    "datasets==3.6.0",
+    "h5py==3.16.0",
+    "lerobot==0.3.3",
+    "numpy==2.2.6",
+    "opencv-python==4.12.0.88",
+    "Pillow==11.1.0",
+    "pyarrow==25.0.1",
+    "scikit-learn==1.7.1",
+    "torch==2.7.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black==23.11.0",
+    "pytest==7.4.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["packages*"]
+
 [tool.black]
 line-length = 100
 target-version = ["py310"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

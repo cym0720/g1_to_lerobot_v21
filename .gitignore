@@ -3,6 +3,7 @@ dataset/
 output/
 sample_dataset.zip
 .venv*/
+*.egg-info/
 __pycache__/
 *.py[cod]
 *.log
@@ -23,3 +24,11 @@ act_training_package.zip
 # Independently versioned upstream framework/vendor checkouts.
 external/
 vendor/
+
+# Local reports, downloaded binaries/bundles and nested working checkouts.
+/artifacts/
+# Experiment code, reports, checkpoints, copied datasets, and run artifacts stay local.
+/experiments/
+/.merge-main-worktree/
+.pytest_cache/
+.ruff_cache/
